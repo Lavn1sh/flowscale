@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"flowscale/internal/observability"
 	"github.com/rabbitmq/amqp091-go"
 )
 
@@ -119,9 +120,11 @@ func (r *RabbitMQ) PublishTask(ctx context.Context, activityName string, payload
 	if err != nil {
 		return err
 	}
+	headers := observability.Inject(ctx, nil)
 	return r.ch.PublishWithContext(ctx, WorkflowExchange, activityName, false, false, amqp091.Publishing{
 		ContentType: "application/json",
 		Body:        body,
+		Headers:     headers,
 	})
 }
 
@@ -130,12 +133,13 @@ func (r *RabbitMQ) PublishRetryTask(ctx context.Context, activityName string, ti
 	if err != nil {
 		return err
 	}
+	headers := observability.Inject(ctx, amqp091.Table{
+		"delay-tier": tier,
+	})
 	return r.ch.PublishWithContext(ctx, RetryExchange, activityName, false, false, amqp091.Publishing{
 		ContentType: "application/json",
 		Body:        body,
-		Headers: amqp091.Table{
-			"delay-tier": tier,
-		},
+		Headers:     headers,
 	})
 }
 
@@ -144,9 +148,11 @@ func (r *RabbitMQ) PublishDLQ(ctx context.Context, activityName string, payload 
 	if err != nil {
 		return err
 	}
+	headers := observability.Inject(ctx, nil)
 	return r.ch.PublishWithContext(ctx, DlqExchange, activityName, false, false, amqp091.Publishing{
 		ContentType: "application/json",
 		Body:        body,
+		Headers:     headers,
 	})
 }
 
@@ -155,9 +161,11 @@ func (r *RabbitMQ) PublishResult(ctx context.Context, payload interface{}) error
 	if err != nil {
 		return err
 	}
+	headers := observability.Inject(ctx, nil)
 	return r.ch.PublishWithContext(ctx, ResultsExchange, "result", false, false, amqp091.Publishing{
 		ContentType: "application/json",
 		Body:        body,
+		Headers:     headers,
 	})
 }
 

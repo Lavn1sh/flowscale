@@ -8,9 +8,13 @@ import (
 	"time"
 
 	"flowscale/internal/models"
+	"flowscale/internal/observability"
 	"flowscale/internal/queue"
 	"flowscale/internal/repository"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Engine struct {
@@ -24,8 +28,14 @@ func NewEngine(wfRepo *repository.WorkflowRepo, execRepo *repository.ExecutionRe
 }
 
 func (e *Engine) StartWorkflow(ctx context.Context, workflowID string) (*models.WorkflowExecution, error) {
+	ctx, span := otel.Tracer("engine").Start(ctx, "StartWorkflow", trace.WithAttributes(
+		attribute.String("workflowID", workflowID),
+	))
+	defer span.End()
+
 	wf, err := e.wfRepo.GetWorkflow(ctx, workflowID)
 	if err != nil {
+		span.RecordError(err)
 		return nil, fmt.Errorf("failed to get workflow: %w", err)
 	}
 
@@ -83,6 +93,9 @@ func (e *Engine) StartWorkflow(ctx context.Context, workflowID string) (*models.
 		return nil, fmt.Errorf("failed to create execution: %w", err)
 	}
 
+	observability.WorkflowsStartedTotal.Inc()
+
+
 	return exec, nil
 }
 
@@ -103,9 +116,9 @@ func (e *Engine) StartResultConsumer(ctx context.Context) {
 		}
 
 		if res.Success {
-			err = e.ReportActivitySuccess(ctx, res.ActivityID, res.ExecutionID, res.ActivityName)
+			err = e.ReportActivitySuccess(observability.Extract(ctx, d.Headers), res.ActivityID, res.ExecutionID, res.ActivityName)
 		} else {
-			err = e.ReportActivityFailure(ctx, res.ActivityID, res.ExecutionID, res.ActivityName)
+			err = e.ReportActivityFailure(observability.Extract(ctx, d.Headers), res.ActivityID, res.ExecutionID, res.ActivityName)
 		}
 
 		if err != nil {
@@ -118,8 +131,16 @@ func (e *Engine) StartResultConsumer(ctx context.Context) {
 }
 
 func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, executionID string, activityName string) error {
+	ctx, span := otel.Tracer("engine").Start(ctx, "ReportActivitySuccess", trace.WithAttributes(
+		attribute.String("executionID", executionID),
+		attribute.String("activityID", activityID),
+		attribute.String("activityName", activityName),
+	))
+	defer span.End()
+
 	conn, err := e.execRepo.LockWorkflow(ctx, executionID)
 	if err != nil {
+		span.RecordError(err)
 		return err
 	}
 	defer e.execRepo.UnlockWorkflow(ctx, conn, executionID)
@@ -194,7 +215,11 @@ func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, e
 				Payload:     []byte(`{}`),
 				Timestamp:   now,
 			}
-			return e.execRepo.CompensatedExecution(ctx, executionID, event)
+			err := e.execRepo.CompensatedExecution(ctx, executionID, event)
+			if err == nil {
+				observability.WorkflowsFailedTotal.Inc()
+			}
+			return err
 		}
 	}
 
@@ -254,13 +279,25 @@ func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, e
 			Payload:     []byte(`{}`),
 			Timestamp:   now,
 		}
-		return e.execRepo.CompleteExecution(ctx, executionID, event)
+		err := e.execRepo.CompleteExecution(ctx, executionID, event)
+		if err == nil {
+			observability.WorkflowsCompletedTotal.Inc()
+		}
+		return err
 	}
 }
 
 func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, executionID string, activityName string) error {
+	ctx, span := otel.Tracer("engine").Start(ctx, "ReportActivityFailure", trace.WithAttributes(
+		attribute.String("executionID", executionID),
+		attribute.String("activityID", activityID),
+		attribute.String("activityName", activityName),
+	))
+	defer span.End()
+
 	conn, err := e.execRepo.LockWorkflow(ctx, executionID)
 	if err != nil {
+		span.RecordError(err)
 		return err
 	}
 	defer e.execRepo.UnlockWorkflow(ctx, conn, executionID)
@@ -336,7 +373,7 @@ func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, e
 			ID:          uuid.NewString(),
 			ExecutionID: executionID,
 			EventType:   models.EventActivityScheduled,
-			Payload:     []byte(fmt.Sprintf(`{"activity":"%s","attempt":%d}`, activityName, nextAttempt)),
+			Payload:     fmt.Appendf(nil, `{"activity":"%s","attempt":%d}`, activityName, nextAttempt),
 			Timestamp:   now,
 		}
 
@@ -447,7 +484,7 @@ func (e *Engine) RetryDeadLetteredActivity(ctx context.Context, activityID strin
 		ID:          uuid.NewString(),
 		ExecutionID: act.ExecutionID,
 		EventType:   models.EventActivityScheduled,
-		Payload:     []byte(fmt.Sprintf(`{"activity":"%s","attempt":%d,"manual_retry":true}`, act.ActivityName, nextAttempt)),
+		Payload:     fmt.Appendf(nil, `{"activity":"%s","attempt":%d,"manual_retry":true}`, act.ActivityName, nextAttempt),
 		Timestamp:   now,
 	}
 
@@ -466,8 +503,14 @@ func (e *Engine) RetryDeadLetteredActivity(ctx context.Context, activityID strin
 }
 
 func (e *Engine) RetryCompensation(ctx context.Context, executionID string) error {
+	ctx, span := otel.Tracer("engine").Start(ctx, "RetryCompensation", trace.WithAttributes(
+		attribute.String("executionID", executionID),
+	))
+	defer span.End()
+
 	conn, err := e.execRepo.LockWorkflow(ctx, executionID)
 	if err != nil {
+		span.RecordError(err)
 		return err
 	}
 	defer e.execRepo.UnlockWorkflow(ctx, conn, executionID)
@@ -530,7 +573,7 @@ func (e *Engine) RetryCompensation(ctx context.Context, executionID string) erro
 		ID:          uuid.NewString(),
 		ExecutionID: executionID,
 		EventType:   models.EventCompensationStarted,
-		Payload:     []byte(fmt.Sprintf(`{"activity":"%s","attempt":%d,"manual_retry":true}`, failedComp.ActivityName, nextAttempt)),
+		Payload:     fmt.Appendf(nil, `{"activity":"%s","attempt":%d,"manual_retry":true}`, failedComp.ActivityName, nextAttempt),
 		Timestamp:   now,
 	}
 

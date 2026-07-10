@@ -14,6 +14,7 @@ import (
 	"flowscale/config"
 	"flowscale/internal/api"
 	"flowscale/internal/engine"
+	"flowscale/internal/observability"
 	"flowscale/internal/queue"
 	"flowscale/internal/repository"
 	"flowscale/internal/scheduler"
@@ -21,10 +22,20 @@ import (
 	"flowscale/logger"
 
 	_ "github.com/lib/pq"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/time/rate"
 )
 
 func main() {
+	observability.InitLogger()
+	tp, err := observability.InitTracer()
+	if err != nil {
+		slog.Error("Failed to init tracer", "err", err)
+	} else {
+		defer tp.Shutdown(context.Background())
+	}
+
 	cfg := config.Load()
 	logger.Init(cfg.Environment)
 
@@ -118,9 +129,12 @@ func main() {
 	mux.Handle("/schedules", scheduleHandler)
 	mux.Handle("/schedules/", scheduleHandler)
 
-	// Apply rate limiting (100 req/s, burst 50) and backpressure (queue > 5000)
+	mux.Handle("/metrics", promhttp.Handler())
+
+	// Apply OTEL Tracing, Rate Limiting (100 req/s, burst 50), and Backpressure (queue > 5000)
 	limiter := rate.NewLimiter(rate.Limit(100), 50)
 	var handler http.Handler = mux
+	handler = otelhttp.NewHandler(handler, "engine-api")
 	handler = api.BackpressureMiddleware(mq, 5000, handler)
 	handler = api.RateLimiterMiddleware(limiter, handler)
 

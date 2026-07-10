@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"flowscale/internal/observability"
 	"flowscale/internal/queue"
 	"golang.org/x/time/rate"
 )
@@ -30,10 +31,13 @@ func BackpressureMiddleware(mq *queue.RabbitMQ, threshold int, next http.Handler
 			depth, err := mq.GetQueueDepth("engine_results")
 			if err != nil {
 				slog.Error("failed to check queue depth for backpressure", "err", err)
-			} else if depth > threshold {
-				slog.Warn("Backpressure activated, rejecting request", "queue_depth", depth, "threshold", threshold)
-				http.Error(w, "Service Unavailable - System Overloaded", http.StatusServiceUnavailable)
-				return
+			} else {
+				observability.QueueDepth.WithLabelValues("engine_results").Set(float64(depth))
+				if depth > threshold {
+					slog.Warn("Backpressure activated, rejecting request", "queue_depth", depth, "threshold", threshold)
+					http.Error(w, "Service Unavailable - System Overloaded", http.StatusServiceUnavailable)
+					return
+				}
 			}
 		}
 		next.ServeHTTP(w, r)

@@ -56,11 +56,12 @@ func (p *OutboxPublisher) processOutbox(ctx context.Context) {
 		// 0  : Normal Task Publish
 		// >0 : Publish Retry Task (Tiered)
 		var pubErr error
-		if msg.Tier == -1 {
+		switch msg.Tier {
+		case -1:
 			pubErr = p.mq.PublishDLQ(ctx, msg.Topic, task)
-		} else if msg.Tier == 0 {
+		case 0:
 			pubErr = p.mq.PublishTask(ctx, msg.Topic, task)
-		} else {
+		default:
 			pubErr = p.mq.PublishRetryTask(ctx, msg.Topic, msg.Tier, task)
 		}
 

@@ -7,9 +7,13 @@ import (
 	"sync"
 
 	"flowscale/internal/models"
+	"flowscale/internal/observability"
 	"flowscale/internal/queue"
 	"flowscale/internal/repository"
 	"github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ActivityContext struct {
@@ -75,9 +79,13 @@ func (w *Worker) Start(ctx context.Context) {
 					}
 
 					w.wg.Add(1)
+					observability.WorkerUtilization.Inc()
 					go func(delivery amqp091.Delivery) {
 						defer w.wg.Done()
-						defer func() { <-w.sem }() // release semaphore
+						defer func() {
+							<-w.sem
+							observability.WorkerUtilization.Dec()
+						}() // release semaphore
 
 						var task models.ActivityTaskMessage
 						if err := json.Unmarshal(delivery.Body, &task); err != nil {
@@ -98,13 +106,28 @@ func (w *Worker) Start(ctx context.Context) {
 							}
 						}
 
+						// Extract trace context from message headers
 						actCtx := ActivityContext{
-							Context:     ctx,
+							Context:     observability.Extract(ctx, delivery.Headers),
 							ExecutionID: task.ExecutionID,
 							ActivityID:  task.ActivityID,
 						}
 
+						observability.ActivitiesStartedTotal.Inc()
+
+						// Start activity span
+						spanCtx, span := otel.Tracer("worker").Start(actCtx.Context, "ExecuteActivity", trace.WithAttributes(
+							attribute.String("activityName", activityName),
+							attribute.String("activityID", task.ActivityID),
+							attribute.String("executionID", task.ExecutionID),
+						))
+						actCtx.Context = spanCtx
+
 						err := handler(actCtx)
+						if err != nil {
+							span.RecordError(err)
+						}
+						span.End()
 						res := models.ActivityResultMessage{
 							ExecutionID:  task.ExecutionID,
 							ActivityID:   task.ActivityID,
@@ -114,8 +137,10 @@ func (w *Worker) Start(ctx context.Context) {
 						if err != nil {
 							slog.Error("Worker activity failed", "activity", activityName, "err", err)
 							res.Error = err.Error()
+							observability.ActivitiesFailedTotal.Inc()
 						} else {
 							slog.Info("Worker activity succeeded", "activity", activityName)
+							observability.ActivitiesCompletedTotal.Inc()
 						}
 
 						if err := w.mq.PublishResult(ctx, res); err != nil {
