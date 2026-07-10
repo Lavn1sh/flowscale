@@ -8,6 +8,7 @@ import (
 
 	"flowscale/config"
 	"flowscale/internal/api"
+	"flowscale/internal/engine"
 	"flowscale/internal/repository"
 	"flowscale/logger"
 
@@ -32,11 +33,17 @@ func main() {
 	slog.Info("Connected to PostgreSQL")
 
 	repo := repository.NewWorkflowRepo(db)
-	handler := api.NewWorkflowHandler(repo)
+	wfHandler := api.NewWorkflowHandler(repo)
+	
+	execRepo := repository.NewExecutionRepo(db)
+	eng := engine.NewEngine(repo, execRepo)
+	execHandler := api.NewExecutionHandler(eng, execRepo)
 
 	mux := http.NewServeMux()
-	mux.Handle("/workflows", handler)
-	mux.Handle("/workflows/", handler)
+	mux.Handle("/workflows/start", execHandler)
+	mux.Handle("/executions/", execHandler)
+	mux.Handle("/workflows", wfHandler)
+	mux.Handle("/workflows/", wfHandler)
 
 	addr := ":" + cfg.Port
 	slog.Info("Starting Workflow Engine", "addr", addr)
