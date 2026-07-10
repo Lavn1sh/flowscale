@@ -522,6 +522,118 @@ Deploy platform to Kubernetes.
 All services deploy successfully.
 
 ---
+ 
+# Milestone 16: Terminal UI (bubbletea)
+ 
+## Goals
+ 
+Provide a fast, no-deploy operator tool for day-to-day use — listing and
+inspecting executions, retrying DLQ items, cancelling workflows — without
+needing curl or the full web app.
+ 
+## Tasks
+ 
+* Build a thin API client against the existing REST API (no new backend
+  endpoints required for this milestone)
+* Executions list view: filterable by status (`RUNNING`, `FAILED`,
+  `COMPENSATING`, etc.), workflow name, and time range
+* Execution detail view: render the `workflow_events` history as a
+  scrollable timeline (activity scheduled → started → completed/failed →
+  retried → compensation started/completed), not just the current status
+* DLQ view: list failed tasks with failure reason, trigger
+  `RetryFailedTask` on a selected item
+* Compensation view: list executions in `FAILED` pending manual
+  intervention, trigger `RetryCompensation` on a selected item
+* Cancel action: trigger `CancelExecution` on a selected running workflow
+* Schedules view: list/create/delete schedules (`CreateSchedule`,
+  `ListSchedules`, `DeleteSchedule`)
+* Basic keybinding help screen
+## Notes
+ 
+This does not need to wait for Milestone 15. A minimal version (executions
+list + detail view + cancel) is useful as soon as `StartWorkflow`,
+`GetExecution`, `ListExecutions`, and `CancelExecution` exist — around
+Milestone 4–5 — and can be used as your day-to-day testing tool for the
+rest of the build instead of curl. Treat this milestone's ordering after
+15 as "hardened and feature-complete," not "first usable version."
+ 
+The TUI talks to the same REST API the web app (Milestone 17) will use.
+Build the API client as a small standalone package so Milestone 17 can
+reuse the request/response types rather than redefining them.
+ 
+## Deliverables
+ 
+* A single terminal binary that lists, inspects, retries, and cancels
+  workflow executions against a running instance of the system
+* No new backend functionality — this milestone is purely a client
+---
+ 
+# Milestone 17: Web App (with team auth)
+ 
+## Goals
+ 
+Provide a browser-based UI suitable for a team: workflow definition
+management, execution monitoring, DLQ/compensation handling, scheduling,
+and basic observability — behind authentication, since this is the
+surface a whole team (not just one operator's terminal) will use.
+ 
+## Tasks
+ 
+### Backend prerequisite: authentication
+ 
+spec.md's API Service listed "Authenticate requests" as future work; this
+milestone is what makes it required. Before or alongside the frontend
+work:
+ 
+* Add an auth layer to the API Service (e.g. JWT bearer tokens validated
+  at the gateway) — a full identity provider is not required, but there
+  must be a login flow issuing tokens and middleware rejecting
+  unauthenticated requests to mutating endpoints at minimum
+* Define a minimal user/session model (even a single `users` table with
+  hashed passwords is sufficient for an MVP team tool — this is not the
+  place to build the "complex RBAC systems" explicitly out of scope in
+  spec.md's Non-Goals; a single authenticated-or-not check is enough
+  unless you decide otherwise)
+* Read endpoints (list/get) can reasonably stay open behind auth-required
+  middleware too, rather than partially public — keep the auth boundary
+  simple
+### Frontend
+ 
+* Login screen, token storage, authenticated API client (reuse types
+  from the Milestone 16 API client package where possible)
+* Workflow definition management: list/create/edit/delete, with a form
+  generated from the schema (per-activity name, compensation, retry
+  policy, timeout) rather than a raw JSON textarea
+* Executions list: filterable, paginated, linking into...
+* Execution detail view: the `workflow_events` timeline rendered visually
+  (this is the highest-value screen — prioritize it)
+* DLQ view: failed tasks, failure reason, retry action
+* Compensation view: executions in `FAILED` pending manual intervention,
+  retry-compensation action
+* Schedules: list/create/delete
+* Observability: queue depth and worker utilization charts pulled from
+  Prometheus, or an embedded link to the existing Grafana dashboards
+  rather than rebuilding charting from scratch
+## Notes
+ 
+This is a pure client on top of the existing REST API plus the new auth
+layer — it does not otherwise touch engine internals, and doesn't affect
+any of Milestones 0–15's acceptance criteria.
+ 
+Build this after Milestone 16, reusing its API client package. The
+TUI's DLQ/compensation/cancel flows are a good reference for what the
+equivalent web screens need to call.
+ 
+## Deliverables
+ 
+* A deployable web application, authenticated, giving a team the same
+  operational capabilities as the TUI plus workflow definition
+  management and observability charts
+* Login flow issuing and validating tokens
+* No regressions to existing REST API behavior for non-web clients (TUI,
+  curl, scripts)
+
+---
 
 # Final Acceptance Criteria
 
