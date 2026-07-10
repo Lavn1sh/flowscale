@@ -7,6 +7,7 @@ import (
 
 	"flowscale/internal/models"
 	"flowscale/internal/queue"
+	"flowscale/internal/repository"
 	"github.com/rabbitmq/amqp091-go"
 )
 
@@ -20,12 +21,14 @@ type ActivityFunc func(ctx ActivityContext) error
 
 type Worker struct {
 	mq         *queue.RabbitMQ
+	execRepo   *repository.ExecutionRepo
 	activities map[string]ActivityFunc
 }
 
-func NewWorker(mq *queue.RabbitMQ) *Worker {
+func NewWorker(mq *queue.RabbitMQ, execRepo *repository.ExecutionRepo) *Worker {
 	return &Worker{
 		mq:         mq,
+		execRepo:   execRepo,
 		activities: make(map[string]ActivityFunc),
 	}
 }
@@ -63,6 +66,16 @@ func (w *Worker) Start(ctx context.Context) {
 					}
 
 					slog.Info("Worker received task", "activity", activityName, "id", task.ActivityID)
+
+					// Deduplication check
+					actExec, dbErr := w.execRepo.GetActivityExecution(ctx, task.ActivityID)
+					if dbErr == nil {
+						if actExec.Status == models.ActivityStatusCompleted || actExec.Status == models.ActivityStatusFailed {
+							slog.Warn("Duplicate task detected, skipping execution", "activity", activityName, "id", task.ActivityID)
+							d.Ack(false)
+							continue
+						}
+					}
 
 					actCtx := ActivityContext{
 						Context:     ctx,

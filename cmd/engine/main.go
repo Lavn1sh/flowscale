@@ -64,7 +64,7 @@ func main() {
 	go eng.StartResultConsumer(context.Background())
 
 	// Milestone 4: Worker wiring via RabbitMQ
-	w := worker.NewWorker(mq)
+	w := worker.NewWorker(mq, execRepo)
 
 	w.RegisterActivity("reserve-inventory", func(ctx worker.ActivityContext) error {
 		slog.Info("Executing reserve-inventory", "executionID", ctx.ExecutionID)

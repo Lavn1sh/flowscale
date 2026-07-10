@@ -111,6 +111,15 @@ func (e *Engine) StartResultConsumer(ctx context.Context) {
 }
 
 func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, executionID string, activityName string) error {
+	actExec, err := e.execRepo.GetActivityExecution(ctx, activityID)
+	if err != nil {
+		return err
+	}
+	if actExec.Status == models.ActivityStatusCompleted {
+		slog.Warn("Duplicate success report ignored", "activityID", activityID)
+		return nil
+	}
+
 	if err := e.execRepo.CompleteActivity(ctx, activityID); err != nil {
 		return err
 	}
@@ -236,6 +245,11 @@ func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, e
 	act, err := e.execRepo.GetActivityExecution(ctx, activityID)
 	if err != nil {
 		return fmt.Errorf("failed to get activity execution: %w", err)
+	}
+
+	if act.Status == models.ActivityStatusFailed {
+		slog.Warn("Duplicate failure report ignored", "activityID", activityID)
+		return nil
 	}
 
 	exec, err := e.execRepo.GetExecution(ctx, executionID)
