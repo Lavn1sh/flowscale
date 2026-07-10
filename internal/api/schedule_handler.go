@@ -53,13 +53,14 @@ func (h *ScheduleHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	sched.UpdatedAt = time.Now()
 
 	now := time.Now()
-	if sched.ScheduleType == models.ScheduleTypeOnce || sched.ScheduleType == models.ScheduleTypeDelayed {
+	switch sched.ScheduleType {
+	case models.ScheduleTypeOnce, models.ScheduleTypeDelayed:
 		if sched.RunAt != nil {
 			sched.NextRunAt = *sched.RunAt
 		} else {
 			sched.NextRunAt = now
 		}
-	} else if sched.ScheduleType == models.ScheduleTypeRecurring {
+	case models.ScheduleTypeRecurring:
 		if sched.CronExpression != "" {
 			parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 			parsed, err := parser.Parse(sched.CronExpression)
@@ -79,7 +80,7 @@ func (h *ScheduleHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "recurring schedule requires cron_expression or interval", http.StatusBadRequest)
 			return
 		}
-	} else {
+	default:
 		http.Error(w, "invalid schedule_type", http.StatusBadRequest)
 		return
 	}

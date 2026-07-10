@@ -196,6 +196,9 @@ func (r *WorkflowRepo) ListSchedules(ctx context.Context) ([]models.Schedule, er
 		}
 		schedules = append(schedules, s)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return schedules, nil
 }
 
@@ -241,6 +244,9 @@ func (r *WorkflowRepo) GetDueSchedules(ctx context.Context, now time.Time) ([]mo
 			s.Interval = interval.String
 		}
 		schedules = append(schedules, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return schedules, nil
 }

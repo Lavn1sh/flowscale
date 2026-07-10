@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"flowscale/internal/engine"
+	"flowscale/internal/models"
 	"flowscale/internal/repository"
 	"log/slog"
 	"net/http"
@@ -30,8 +31,22 @@ func (h *ExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodGet && (path == "executions" || path == "executions/") {
+		h.handleList(w, r)
+		return
+	}
+
 	if r.Method == http.MethodGet && strings.HasPrefix(path, "executions/") {
 		id := strings.TrimPrefix(path, "executions/")
+		if id == "" {
+			h.handleList(w, r)
+			return
+		}
+		if strings.HasSuffix(id, "/events") {
+			id = strings.TrimSuffix(id, "/events")
+			h.handleGetEvents(w, r, id)
+			return
+		}
 		h.handleGet(w, r, id)
 		return
 	}
@@ -65,4 +80,32 @@ func (h *ExecutionHandler) handleGet(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	json.NewEncoder(w).Encode(exec)
+}
+
+func (h *ExecutionHandler) handleList(w http.ResponseWriter, r *http.Request) {
+	execs, err := h.execRepo.ListExecutions(r.Context())
+	if err != nil {
+		slog.Error("failed to list executions", "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if execs == nil {
+		execs = make([]models.WorkflowExecution, 0)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(execs)
+}
+
+func (h *ExecutionHandler) handleGetEvents(w http.ResponseWriter, r *http.Request, id string) {
+	events, err := h.execRepo.GetExecutionEvents(r.Context(), id)
+	if err != nil {
+		slog.Error("failed to get execution events", "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if events == nil {
+		events = make([]models.WorkflowEvent, 0)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(events)
 }

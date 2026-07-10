@@ -90,6 +90,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/workflows/start", execHandler)
+	mux.Handle("/executions", execHandler)
 	mux.Handle("/executions/", execHandler)
 	mux.Handle("/workflows", wfHandler)
 	mux.Handle("/workflows/", wfHandler)

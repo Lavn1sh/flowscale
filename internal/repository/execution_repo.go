@@ -68,6 +68,59 @@ func (r *ExecutionRepo) GetExecution(ctx context.Context, id string) (*models.Wo
 	return &exec, nil
 }
 
+func (r *ExecutionRepo) ListExecutions(ctx context.Context) ([]models.WorkflowExecution, error) {
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT id, workflow_id, status, current_activity, created_at, updated_at FROM workflow_executions ORDER BY created_at DESC",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var execs []models.WorkflowExecution
+	for rows.Next() {
+		var exec models.WorkflowExecution
+		var curActivity sql.NullString
+		if err := rows.Scan(&exec.ID, &exec.WorkflowID, &exec.Status, &curActivity, &exec.CreatedAt, &exec.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if curActivity.Valid {
+			exec.CurrentActivity = curActivity.String
+		}
+		execs = append(execs, exec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return execs, nil
+}
+
+func (r *ExecutionRepo) GetExecutionEvents(ctx context.Context, executionID string) ([]models.WorkflowEvent, error) {
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT id, execution_id, event_type, payload, timestamp FROM workflow_events WHERE execution_id = $1 ORDER BY timestamp ASC",
+		executionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []models.WorkflowEvent
+	for rows.Next() {
+		var event models.WorkflowEvent
+		var payload []byte
+		if err := rows.Scan(&event.ID, &event.ExecutionID, &event.EventType, &payload, &event.Timestamp); err != nil {
+			return nil, err
+		}
+		event.Payload = payload
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
 func (r *ExecutionRepo) GetActivityExecution(ctx context.Context, activityID string) (*models.ActivityExecution, error) {
 	var act models.ActivityExecution
 	err := r.db.QueryRowContext(ctx,
