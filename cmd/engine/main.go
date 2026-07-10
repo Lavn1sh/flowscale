@@ -14,6 +14,7 @@ import (
 	"flowscale/config"
 	"flowscale/internal/api"
 	"flowscale/internal/engine"
+	"flowscale/internal/models"
 	"flowscale/internal/observability"
 	"flowscale/internal/queue"
 	"flowscale/internal/repository"
@@ -21,6 +22,8 @@ import (
 	"flowscale/internal/worker"
 	"flowscale/logger"
 
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 	_ "github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -52,6 +55,21 @@ func main() {
 	}
 	slog.Info("Connected to PostgreSQL")
 
+	execRepo := repository.NewExecutionRepo(db)
+	userRepo := repository.NewUserRepo(db)
+	wfRepo := repository.NewWorkflowRepo(db)
+
+	// Seed admin user
+	if user, err := userRepo.GetUserByUsername(context.Background(), "admin"); err != nil || user == nil {
+		// Create admin user if it doesn't exist
+		hash, _ := bcrypt.GenerateFromPassword([]byte("admin"), bcrypt.DefaultCost)
+		_ = userRepo.CreateUser(context.Background(), &models.User{
+			ID:           uuid.NewString(),
+			Username:     "admin",
+			PasswordHash: string(hash),
+		})
+	}
+
 	mq, err := queue.NewRabbitMQ(cfg.RabbitMQURL)
 	if err != nil {
 		slog.Error("Failed to connect to RabbitMQ", "error", err)
@@ -60,14 +78,7 @@ func main() {
 	defer mq.Close()
 	slog.Info("Connected to RabbitMQ")
 
-	repo := repository.NewWorkflowRepo(db)
-	wfHandler := api.NewWorkflowHandler(repo)
-
-	execRepo := repository.NewExecutionRepo(db)
-	eng := engine.NewEngine(repo, execRepo, mq)
-	execHandler := api.NewExecutionHandler(eng, execRepo)
-	dlqHandler := api.NewDLQHandler(eng, execRepo)
-	scheduleHandler := api.NewScheduleHandler(repo)
+	eng := engine.NewEngine(wfRepo, execRepo, mq)
 
 	role := os.Getenv("ROLE")
 	if role == "" {
@@ -95,7 +106,7 @@ func main() {
 
 	if isScheduler {
 		// Start Scheduler
-		sched = scheduler.NewScheduler(repo, eng)
+		sched = scheduler.NewScheduler(wfRepo, eng)
 		sched.Start()
 		defer sched.Stop()
 	}
@@ -145,9 +156,16 @@ func main() {
 	mux.Handle("/metrics", promhttp.Handler())
 
 	if isAPI {
-		mux.Handle("/workflows/start", execHandler)
+		wfHandler := api.NewWorkflowHandler(wfRepo)
+		execHandler := api.NewExecutionHandler(eng, execRepo)
+		dlqHandler := api.NewDLQHandler(eng, execRepo)
+		scheduleHandler := api.NewScheduleHandler(wfRepo)
+		authHandler := api.NewAuthHandler(userRepo)
+
+		mux.Handle("/api/auth/login", authHandler)
 		mux.Handle("/executions", execHandler)
 		mux.Handle("/executions/", execHandler)
+		mux.Handle("/workflows/start", execHandler)
 		mux.Handle("/workflows", wfHandler)
 		mux.Handle("/workflows/", wfHandler)
 		mux.Handle("/activities/dlq", dlqHandler)
@@ -160,6 +178,11 @@ func main() {
 	limiter := rate.NewLimiter(rate.Limit(100), 50)
 	var handler http.Handler = mux
 	if isAPI {
+		// Wrap with CORS
+		handler = api.CorsMiddleware(handler)
+		// Wrap with Auth
+		handler = api.AuthMiddleware(handler)
+		
 		handler = otelhttp.NewHandler(handler, "engine-api")
 		handler = api.BackpressureMiddleware(mq, 5000, handler)
 		handler = api.RateLimiterMiddleware(limiter, handler)
