@@ -118,6 +118,12 @@ func (e *Engine) StartResultConsumer(ctx context.Context) {
 }
 
 func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, executionID string, activityName string) error {
+	conn, err := e.execRepo.LockWorkflow(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	defer e.execRepo.UnlockWorkflow(ctx, conn, executionID)
+
 	actExec, err := e.execRepo.GetActivityExecution(ctx, activityID)
 	if err != nil {
 		return err
@@ -253,6 +259,12 @@ func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, e
 }
 
 func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, executionID string, activityName string) error {
+	conn, err := e.execRepo.LockWorkflow(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	defer e.execRepo.UnlockWorkflow(ctx, conn, executionID)
+
 	act, err := e.execRepo.GetActivityExecution(ctx, activityID)
 	if err != nil {
 		return fmt.Errorf("failed to get activity execution: %w", err)
@@ -454,6 +466,12 @@ func (e *Engine) RetryDeadLetteredActivity(ctx context.Context, activityID strin
 }
 
 func (e *Engine) RetryCompensation(ctx context.Context, executionID string) error {
+	conn, err := e.execRepo.LockWorkflow(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	defer e.execRepo.UnlockWorkflow(ctx, conn, executionID)
+
 	exec, err := e.execRepo.GetExecution(ctx, executionID)
 	if err != nil {
 		return err

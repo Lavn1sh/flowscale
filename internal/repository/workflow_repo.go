@@ -17,6 +17,10 @@ func NewWorkflowRepo(db *sql.DB) *WorkflowRepo {
 	return &WorkflowRepo{db: db}
 }
 
+func (r *WorkflowRepo) DB() *sql.DB {
+	return r.db
+}
+
 func (r *WorkflowRepo) CreateWorkflow(ctx context.Context, wf *models.Workflow) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

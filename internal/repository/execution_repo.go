@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"hash/fnv"
 	"time"
 
 	"flowscale/internal/models"
@@ -14,6 +16,44 @@ type ExecutionRepo struct {
 
 func NewExecutionRepo(db *sql.DB) *ExecutionRepo {
 	return &ExecutionRepo{db: db}
+}
+
+// LockWorkflow acquires a session-level advisory lock for the given workflow execution ID.
+func (r *ExecutionRepo) LockWorkflow(ctx context.Context, executionID string) (*sql.Conn, error) {
+	conn, err := r.db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get connection for lock: %w", err)
+	}
+
+	h := fnv.New64a()
+	h.Write([]byte(executionID))
+	lockKey := int64(h.Sum64())
+
+	_, err = conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", lockKey)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to acquire advisory lock: %w", err)
+	}
+
+	return conn, nil
+}
+
+// UnlockWorkflow releases the session-level advisory lock for the workflow execution ID and closes the connection.
+func (r *ExecutionRepo) UnlockWorkflow(ctx context.Context, conn *sql.Conn, executionID string) error {
+	if conn == nil {
+		return nil
+	}
+	defer conn.Close()
+
+	h := fnv.New64a()
+	h.Write([]byte(executionID))
+	lockKey := int64(h.Sum64())
+
+	_, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", lockKey)
+	if err != nil {
+		return fmt.Errorf("failed to release advisory lock: %w", err)
+	}
+	return nil
 }
 
 func (r *ExecutionRepo) CreateExecution(ctx context.Context, exec *models.WorkflowExecution, initialEvent *models.WorkflowEvent, initialActivity *models.ActivityExecution, outboxMsg *models.OutboxMessage) error {
