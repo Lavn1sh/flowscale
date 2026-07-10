@@ -49,7 +49,7 @@ func (r *RabbitMQ) declareTopology() error {
 	if err := r.ch.ExchangeDeclare(ResultsExchange, "topic", true, false, false, false, nil); err != nil {
 		return err
 	}
-	if err := r.ch.ExchangeDeclare(DlqExchange, "fanout", true, false, false, false, nil); err != nil {
+	if err := r.ch.ExchangeDeclare(DlqExchange, "topic", true, false, false, false, nil); err != nil {
 		return err
 	}
 	if err := r.ch.ExchangeDeclare(RetryExchange, "headers", true, false, false, false, nil); err != nil {
@@ -101,6 +101,16 @@ func (r *RabbitMQ) RegisterActivityQueue(activityName string) error {
 	if err := r.ch.QueueBind(queueName, activityName, WorkflowExchange, false, nil); err != nil {
 		return err
 	}
+
+	dlqName := fmt.Sprintf("activity.%s.dlq", activityName)
+	_, err = r.ch.QueueDeclare(dlqName, true, false, false, false, nil)
+	if err != nil {
+		return err
+	}
+	if err := r.ch.QueueBind(dlqName, activityName, DlqExchange, false, nil); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -126,6 +136,17 @@ func (r *RabbitMQ) PublishRetryTask(ctx context.Context, activityName string, ti
 		Headers: amqp091.Table{
 			"delay-tier": tier,
 		},
+	})
+}
+
+func (r *RabbitMQ) PublishDLQ(ctx context.Context, activityName string, payload interface{}) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return r.ch.PublishWithContext(ctx, DlqExchange, activityName, false, false, amqp091.Publishing{
+		ContentType: "application/json",
+		Body:        body,
 	})
 }
 

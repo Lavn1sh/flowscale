@@ -256,9 +256,16 @@ func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, e
 		return err
 	}
 
-	if err := e.execRepo.FailActivity(ctx, activityID); err != nil {
+	if err := e.execRepo.DeadLetterActivity(ctx, activityID); err != nil {
 		return err
 	}
+
+	e.mq.PublishDLQ(ctx, activityName, models.ActivityTaskMessage{
+		ExecutionID:    executionID,
+		ActivityID:     activityID,
+		ActivityName:   activityName,
+		IdempotencyKey: act.IdempotencyKey,
+	})
 
 	now := time.Now()
 	event := &models.WorkflowEvent{
@@ -269,4 +276,45 @@ func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, e
 		Timestamp:   now,
 	}
 	return e.execRepo.FailExecution(ctx, executionID, event)
+}
+
+func (e *Engine) RetryDeadLetteredActivity(ctx context.Context, activityID string) error {
+	act, err := e.execRepo.GetActivityExecution(ctx, activityID)
+	if err != nil {
+		return err
+	}
+
+	if act.DeadLetteredAt == nil {
+		return fmt.Errorf("activity is not dead-lettered")
+	}
+
+	nextAttempt := act.Attempt + 1
+	nextExec := &models.ActivityExecution{
+		ID:             uuid.NewString(),
+		ExecutionID:    act.ExecutionID,
+		ActivityName:   act.ActivityName,
+		Attempt:        nextAttempt,
+		Status:         models.ActivityStatusPending,
+		IdempotencyKey: fmt.Sprintf("%s-%s-%d", act.ExecutionID, act.ActivityName, nextAttempt),
+	}
+
+	now := time.Now()
+	event := &models.WorkflowEvent{
+		ID:          uuid.NewString(),
+		ExecutionID: act.ExecutionID,
+		EventType:   models.EventActivityScheduled,
+		Payload:     []byte(fmt.Sprintf(`{"activity":"%s","attempt":%d,"manual_retry":true}`, act.ActivityName, nextAttempt)),
+		Timestamp:   now,
+	}
+
+	err = e.execRepo.ScheduleNextActivity(ctx, act.ExecutionID, nextExec, event)
+	if err == nil {
+		e.mq.PublishTask(ctx, act.ActivityName, models.ActivityTaskMessage{
+			ExecutionID:    act.ExecutionID,
+			ActivityID:     nextExec.ID,
+			ActivityName:   nextExec.ActivityName,
+			IdempotencyKey: nextExec.IdempotencyKey,
+		})
+	}
+	return err
 }

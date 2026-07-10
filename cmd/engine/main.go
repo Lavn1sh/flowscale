@@ -51,6 +51,7 @@ func main() {
 	execRepo := repository.NewExecutionRepo(db)
 	eng := engine.NewEngine(repo, execRepo, mq)
 	execHandler := api.NewExecutionHandler(eng, execRepo)
+	dlqHandler := api.NewDLQHandler(eng, execRepo)
 
 	// Start result consumer
 	go eng.StartResultConsumer(context.Background())
@@ -58,16 +59,10 @@ func main() {
 	// Milestone 4: Worker wiring via RabbitMQ
 	w := worker.NewWorker(mq)
 
-	var reserveCounter int
 	w.RegisterActivity("reserve-inventory", func(ctx worker.ActivityContext) error {
 		slog.Info("Executing reserve-inventory", "executionID", ctx.ExecutionID)
-		reserveCounter++
-		if reserveCounter <= 2 {
-			slog.Warn("Simulating failure for reserve-inventory")
-			return fmt.Errorf("simulated failure %d", reserveCounter)
-		}
-		time.Sleep(1 * time.Second)
-		return nil
+		slog.Warn("Simulating failure for reserve-inventory")
+		return fmt.Errorf("simulated permanent failure")
 	})
 	w.RegisterActivity("charge-card", func(ctx worker.ActivityContext) error {
 		slog.Info("Executing charge-card", "executionID", ctx.ExecutionID)
@@ -91,6 +86,8 @@ func main() {
 	mux.Handle("/executions/", execHandler)
 	mux.Handle("/workflows", wfHandler)
 	mux.Handle("/workflows/", wfHandler)
+	mux.Handle("/activities/dlq", dlqHandler)
+	mux.Handle("/activities/dlq/", dlqHandler)
 
 	addr := ":" + cfg.Port
 	slog.Info("Starting Workflow Engine", "addr", addr)

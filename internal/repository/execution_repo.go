@@ -71,9 +71,9 @@ func (r *ExecutionRepo) GetExecution(ctx context.Context, id string) (*models.Wo
 func (r *ExecutionRepo) GetActivityExecution(ctx context.Context, activityID string) (*models.ActivityExecution, error) {
 	var act models.ActivityExecution
 	err := r.db.QueryRowContext(ctx,
-		"SELECT id, execution_id, activity_name, attempt, status, idempotency_key FROM activity_executions WHERE id = $1",
+		"SELECT id, execution_id, activity_name, attempt, status, idempotency_key, started_at, completed_at, dead_lettered_at FROM activity_executions WHERE id = $1",
 		activityID,
-	).Scan(&act.ID, &act.ExecutionID, &act.ActivityName, &act.Attempt, &act.Status, &act.IdempotencyKey)
+	).Scan(&act.ID, &act.ExecutionID, &act.ActivityName, &act.Attempt, &act.Status, &act.IdempotencyKey, &act.StartedAt, &act.CompletedAt, &act.DeadLetteredAt)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +94,34 @@ func (r *ExecutionRepo) FailActivity(ctx context.Context, activityID string) err
 		models.ActivityStatusFailed, activityID,
 	)
 	return err
+}
+
+func (r *ExecutionRepo) DeadLetterActivity(ctx context.Context, activityID string) error {
+	_, err := r.db.ExecContext(ctx,
+		"UPDATE activity_executions SET status = $1, dead_lettered_at = $2 WHERE id = $3",
+		models.ActivityStatusFailed, time.Now(), activityID,
+	)
+	return err
+}
+
+func (r *ExecutionRepo) ListDeadLetteredActivities(ctx context.Context) ([]models.ActivityExecution, error) {
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT id, execution_id, activity_name, attempt, status, idempotency_key, started_at, completed_at, dead_lettered_at FROM activity_executions WHERE dead_lettered_at IS NOT NULL ORDER BY dead_lettered_at DESC",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var acts []models.ActivityExecution
+	for rows.Next() {
+		var act models.ActivityExecution
+		if err := rows.Scan(&act.ID, &act.ExecutionID, &act.ActivityName, &act.Attempt, &act.Status, &act.IdempotencyKey, &act.StartedAt, &act.CompletedAt, &act.DeadLetteredAt); err != nil {
+			return nil, err
+		}
+		acts = append(acts, act)
+	}
+	return acts, rows.Err()
 }
 
 func (r *ExecutionRepo) ScheduleNextActivity(ctx context.Context, executionID string, nextActivity *models.ActivityExecution, event *models.WorkflowEvent) error {
