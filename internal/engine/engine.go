@@ -636,3 +636,14 @@ func determineNextCompensation(wf *models.Workflow, acts []models.ActivityExecut
 	}
 	return nil
 }
+
+func (e *Engine) CancelExecution(ctx context.Context, executionID string) error {
+	event := &models.WorkflowEvent{
+		ID:          uuid.NewString(),
+		ExecutionID: executionID,
+		EventType:   models.EventWorkflowFailed,
+		Payload:     []byte(`{"reason":"cancelled by user"}`),
+		Timestamp:   time.Now(),
+	}
+	return e.execRepo.CancelExecution(ctx, executionID, event)
+}

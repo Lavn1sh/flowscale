@@ -128,8 +128,9 @@ func (r *WorkflowRepo) GetWorkflow(ctx context.Context, id string) (*models.Work
 	return &wf, nil
 }
 
-func (r *WorkflowRepo) ListWorkflows(ctx context.Context) ([]*models.Workflow, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT id, name FROM workflows ORDER BY created_at DESC")
+func (r *WorkflowRepo) ListWorkflows(ctx context.Context, limit, offset int) ([]*models.Workflow, error) {
+	query := `SELECT id, name FROM workflows ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+	rows, err := r.db.QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, err
 	}

@@ -133,6 +133,9 @@ func (r *Reaper) reapTimeouts(ctx context.Context, timeoutDuration time.Duration
 			timedOut = append(timedOut, act)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		slog.Error("Reaper failed to iterate timeouts", "err", err)
+	}
 	rows.Close()
 
 	for _, act := range timedOut {

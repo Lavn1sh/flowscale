@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"hash/fnv"
+	"strings"
 	"time"
 
 	"flowscale/internal/models"
@@ -133,10 +134,59 @@ func (r *ExecutionRepo) GetExecution(ctx context.Context, id string) (*models.Wo
 	return &exec, nil
 }
 
-func (r *ExecutionRepo) ListExecutions(ctx context.Context) ([]models.WorkflowExecution, error) {
-	rows, err := r.db.QueryContext(ctx,
-		"SELECT id, workflow_id, status, current_activity, created_at, updated_at FROM workflow_executions ORDER BY created_at DESC",
-	)
+func (r *ExecutionRepo) ListExecutions(ctx context.Context, status, workflowID, timeRange string, limit, offset int) ([]models.WorkflowExecution, error) {
+	query := "SELECT id, workflow_id, status, current_activity, created_at, updated_at FROM workflow_executions"
+	var conditions []string
+	var args []interface{}
+	argID := 1
+
+	if status != "" {
+		conditions = append(conditions, fmt.Sprintf("status = $%d", argID))
+		args = append(args, status)
+		argID++
+	}
+
+	if workflowID != "" {
+		conditions = append(conditions, fmt.Sprintf("workflow_id = $%d", argID))
+		args = append(args, workflowID)
+		argID++
+	}
+
+	if timeRange != "" {
+		var d time.Duration
+		switch timeRange {
+		case "1h":
+			d = -1 * time.Hour
+		case "24h":
+			d = -24 * time.Hour
+		case "7d":
+			d = -7 * 24 * time.Hour
+		}
+		if d != 0 {
+			conditions = append(conditions, fmt.Sprintf("created_at >= $%d", argID))
+			args = append(args, time.Now().Add(d))
+			argID++
+		}
+	}
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	query += " ORDER BY created_at DESC"
+	
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d", argID)
+		args = append(args, limit)
+		argID++
+	}
+	if offset > 0 {
+		query += fmt.Sprintf(" OFFSET $%d", argID)
+		args = append(args, offset)
+		argID++
+	}
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -398,6 +448,34 @@ func (r *ExecutionRepo) FailExecution(ctx context.Context, executionID string, e
 	return tx.Commit()
 }
 
+func (r *ExecutionRepo) CancelExecution(ctx context.Context, executionID string, event *models.WorkflowEvent) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx,
+		`UPDATE workflow_executions SET status = $1, updated_at = $2 WHERE id = $3 AND status NOT IN ($4, $5, $6)`,
+		models.ExecutionStatusCancelled, time.Now(), executionID,
+		models.ExecutionStatusCompleted, models.ExecutionStatusFailed, models.ExecutionStatusCancelled,
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO workflow_events (id, execution_id, event_type, payload, timestamp)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		event.ID, event.ExecutionID, event.EventType, event.Payload, event.Timestamp,
+	)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func (r *ExecutionRepo) ListActivityExecutions(ctx context.Context, executionID string) ([]models.ActivityExecution, error) {
 	rows, err := r.db.QueryContext(ctx,
 		"SELECT id, execution_id, activity_name, attempt, status, idempotency_key, started_at, completed_at, dead_lettered_at FROM activity_executions WHERE execution_id = $1 ORDER BY completed_at ASC NULLS LAST",
@@ -525,3 +603,19 @@ func (r *ExecutionRepo) DeleteOutboxMessage(ctx context.Context, id string) erro
 	_, err := r.db.ExecContext(ctx, "DELETE FROM outbox_messages WHERE id = $1", id)
 	return err
 }
+
+func (r *ExecutionRepo) DeleteExecution(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, "DELETE FROM workflow_executions WHERE id = $1", id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return fmt.Errorf("execution not found")
+	}
+	return nil
+}
+

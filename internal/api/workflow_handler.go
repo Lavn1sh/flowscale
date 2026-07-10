@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -82,7 +83,20 @@ func (h *WorkflowHandler) handleGet(w http.ResponseWriter, r *http.Request, id s
 }
 
 func (h *WorkflowHandler) handleList(w http.ResponseWriter, r *http.Request) {
-	wfs, err := h.repo.ListWorkflows(r.Context())
+	limitStr := r.URL.Query().Get("limit")
+	offsetStr := r.URL.Query().Get("offset")
+	
+	limit := 50
+	offset := 0
+	
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+		limit = l
+	}
+	if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+		offset = o
+	}
+
+	wfs, err := h.repo.ListWorkflows(r.Context(), limit, offset)
 	if err != nil {
 		slog.Error("failed to list workflows", "err", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)

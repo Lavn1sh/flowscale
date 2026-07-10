@@ -14,6 +14,7 @@ import (
 type Client struct {
 	BaseURL    string
 	HTTPClient *http.Client
+	Token      string
 }
 
 func NewClient(baseURL string) *Client {
@@ -43,6 +44,10 @@ func (c *Client) do(method, path string, body interface{}, out interface{}) erro
 		req.Header.Set("Content-Type", "application/json")
 	}
 
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+
 	res, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return err
@@ -60,6 +65,20 @@ func (c *Client) do(method, path string, body interface{}, out interface{}) erro
 	return nil
 }
 
+func (c *Client) Login(username, password string) error {
+	var out struct {
+		Token string `json:"token"`
+	}
+	err := c.do("POST", "/api/auth/login", map[string]string{
+		"username": username,
+		"password": password,
+	}, &out)
+	if err == nil {
+		c.Token = out.Token
+	}
+	return err
+}
+
 // Workflows
 func (c *Client) ListWorkflows() ([]models.Workflow, error) {
 	var out []models.Workflow
@@ -75,9 +94,19 @@ func (c *Client) StartWorkflow(id string) (*models.WorkflowExecution, error) {
 }
 
 // Executions
-func (c *Client) ListExecutions() ([]models.WorkflowExecution, error) {
+func (c *Client) ListExecutions(status, workflowID, timeRange string) ([]models.WorkflowExecution, error) {
 	var out []models.WorkflowExecution
-	err := c.do("GET", "/executions", nil, &out)
+	path := "/executions?"
+	if status != "" {
+		path += "status=" + status + "&"
+	}
+	if workflowID != "" {
+		path += "workflow_id=" + workflowID + "&"
+	}
+	if timeRange != "" {
+		path += "time_range=" + timeRange + "&"
+	}
+	err := c.do("GET", path, nil, &out)
 	return out, err
 }
 
@@ -91,6 +120,14 @@ func (c *Client) GetExecutionEvents(id string) ([]models.WorkflowEvent, error) {
 	var out []models.WorkflowEvent
 	err := c.do("GET", "/executions/"+id+"/events", nil, &out)
 	return out, err
+}
+
+func (c *Client) CancelExecution(id string) error {
+	return c.do("POST", "/executions/"+id+"/cancel", nil, nil)
+}
+
+func (c *Client) RetryCompensation(id string) error {
+	return c.do("POST", "/executions/"+id+"/compensate/retry", nil, nil)
 }
 
 // DLQ
@@ -109,4 +146,14 @@ func (c *Client) ListSchedules() ([]models.Schedule, error) {
 	var out []models.Schedule
 	err := c.do("GET", "/schedules", nil, &out)
 	return out, err
+}
+
+func (c *Client) CreateSchedule(sched models.Schedule) (*models.Schedule, error) {
+	var out models.Schedule
+	err := c.do("POST", "/schedules", sched, &out)
+	return &out, err
+}
+
+func (c *Client) DeleteSchedule(id string) error {
+	return c.do("DELETE", "/schedules/"+id, nil, nil)
 }

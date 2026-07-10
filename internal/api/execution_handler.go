@@ -7,6 +7,7 @@ import (
 	"flowscale/internal/repository"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -43,6 +44,13 @@ func (h *ExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodPost && strings.HasPrefix(path, "executions/") && strings.HasSuffix(path, "/cancel") {
+		id := strings.TrimPrefix(path, "executions/")
+		id = strings.TrimSuffix(id, "/cancel")
+		h.handleCancel(w, r, id)
+		return
+	}
+
 	if r.Method == http.MethodGet && strings.HasPrefix(path, "executions/") {
 		id := strings.TrimPrefix(path, "executions/")
 		if id == "" {
@@ -55,6 +63,12 @@ func (h *ExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handleGet(w, r, id)
+		return
+	}
+
+	if r.Method == http.MethodDelete && strings.HasPrefix(path, "executions/") {
+		id := strings.TrimPrefix(path, "executions/")
+		h.handleDelete(w, r, id)
 		return
 	}
 
@@ -90,7 +104,23 @@ func (h *ExecutionHandler) handleGet(w http.ResponseWriter, r *http.Request, id 
 }
 
 func (h *ExecutionHandler) handleList(w http.ResponseWriter, r *http.Request) {
-	execs, err := h.execRepo.ListExecutions(r.Context())
+	status := r.URL.Query().Get("status")
+	workflowID := r.URL.Query().Get("workflow_id")
+	timeRange := r.URL.Query().Get("time_range")
+	limitStr := r.URL.Query().Get("limit")
+	offsetStr := r.URL.Query().Get("offset")
+	
+	limit := 50
+	offset := 0
+	
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+		limit = l
+	}
+	if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+		offset = o
+	}
+
+	execs, err := h.execRepo.ListExecutions(r.Context(), status, workflowID, timeRange, limit, offset)
 	if err != nil {
 		slog.Error("failed to list executions", "err", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -123,4 +153,25 @@ func (h *ExecutionHandler) handleRetryCompensation(w http.ResponseWriter, r *htt
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *ExecutionHandler) handleCancel(w http.ResponseWriter, r *http.Request, executionID string) {
+	if err := h.engine.CancelExecution(r.Context(), executionID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *ExecutionHandler) handleDelete(w http.ResponseWriter, r *http.Request, executionID string) {
+	if err := h.execRepo.DeleteExecution(r.Context(), executionID); err != nil {
+		if err.Error() == "execution not found" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		slog.Error("failed to delete execution", "err", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
