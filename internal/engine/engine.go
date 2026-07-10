@@ -118,7 +118,7 @@ func (e *Engine) StartResultConsumer(ctx context.Context) {
 		if res.Success {
 			err = e.ReportActivitySuccess(observability.Extract(ctx, d.Headers), res.ActivityID, res.ExecutionID, res.ActivityName)
 		} else {
-			err = e.ReportActivityFailure(observability.Extract(ctx, d.Headers), res.ActivityID, res.ExecutionID, res.ActivityName)
+			err = e.ReportActivityFailure(observability.Extract(ctx, d.Headers), res.ActivityID, res.ExecutionID, res.ActivityName, res.NonRetryable)
 		}
 
 		if err != nil {
@@ -287,7 +287,7 @@ func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, e
 	}
 }
 
-func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, executionID string, activityName string) error {
+func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, executionID string, activityName string, nonRetryable bool) error {
 	ctx, span := otel.Tracer("engine").Start(ctx, "ReportActivityFailure", trace.WithAttributes(
 		attribute.String("executionID", executionID),
 		attribute.String("activityID", activityID),
@@ -348,7 +348,7 @@ func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, e
 		maxAttempts = wfAct.RetryPolicy.MaxAttempts
 	}
 
-	if act.Attempt < maxAttempts {
+	if act.Attempt < maxAttempts && !nonRetryable {
 		if err := e.execRepo.FailActivity(ctx, activityID); err != nil {
 			return err
 		}

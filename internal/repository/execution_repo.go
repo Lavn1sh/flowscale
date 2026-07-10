@@ -56,6 +56,25 @@ func (r *ExecutionRepo) UnlockWorkflow(ctx context.Context, conn *sql.Conn, exec
 	return nil
 }
 
+// RecordHeartbeat updates the last_heartbeat_at timestamp for a specific activity execution.
+func (r *ExecutionRepo) RecordHeartbeat(ctx context.Context, activityID string) error {
+	res, err := r.db.ExecContext(ctx,
+		"UPDATE activity_executions SET last_heartbeat_at = $1 WHERE id = $2 AND status = $3",
+		time.Now(), activityID, models.ActivityStatusPending,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update heartbeat: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("activity execution not found or not in pending state")
+	}
+	return nil
+}
+
 func (r *ExecutionRepo) CreateExecution(ctx context.Context, exec *models.WorkflowExecution, initialEvent *models.WorkflowEvent, initialActivity *models.ActivityExecution, outboxMsg *models.OutboxMessage) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -83,10 +102,10 @@ func (r *ExecutionRepo) CreateExecution(ctx context.Context, exec *models.Workfl
 
 	if initialActivity != nil {
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO activity_executions (id, execution_id, activity_name, attempt, status, idempotency_key)
-			 VALUES ($1, $2, $3, $4, $5, $6)`,
+			`INSERT INTO activity_executions (id, execution_id, activity_name, attempt, status, idempotency_key, last_heartbeat_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 			initialActivity.ID, initialActivity.ExecutionID, initialActivity.ActivityName,
-			initialActivity.Attempt, initialActivity.Status, initialActivity.IdempotencyKey,
+			initialActivity.Attempt, initialActivity.Status, initialActivity.IdempotencyKey, time.Now(),
 		)
 		if err != nil {
 			return err
@@ -255,10 +274,10 @@ func (r *ExecutionRepo) RetryActivity(ctx context.Context, executionID string, n
 	}
 
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO activity_executions (id, execution_id, activity_name, attempt, status, idempotency_key)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		`INSERT INTO activity_executions (id, execution_id, activity_name, attempt, status, idempotency_key, last_heartbeat_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		nextActivity.ID, nextActivity.ExecutionID, nextActivity.ActivityName,
-		nextActivity.Attempt, nextActivity.Status, nextActivity.IdempotencyKey,
+		nextActivity.Attempt, nextActivity.Status, nextActivity.IdempotencyKey, time.Now(),
 	)
 	if err != nil {
 		return err
@@ -298,10 +317,10 @@ func (r *ExecutionRepo) ScheduleNextActivity(ctx context.Context, executionID st
 	}
 
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO activity_executions (id, execution_id, activity_name, attempt, status, idempotency_key)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		`INSERT INTO activity_executions (id, execution_id, activity_name, attempt, status, idempotency_key, last_heartbeat_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		nextActivity.ID, nextActivity.ExecutionID, nextActivity.ActivityName,
-		nextActivity.Attempt, nextActivity.Status, nextActivity.IdempotencyKey,
+		nextActivity.Attempt, nextActivity.Status, nextActivity.IdempotencyKey, time.Now(),
 	)
 	if err != nil {
 		return err
@@ -419,10 +438,10 @@ func (r *ExecutionRepo) StartCompensating(ctx context.Context, executionID strin
 	}
 
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO activity_executions (id, execution_id, activity_name, attempt, status, idempotency_key)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		`INSERT INTO activity_executions (id, execution_id, activity_name, attempt, status, idempotency_key, last_heartbeat_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		nextActivity.ID, nextActivity.ExecutionID, nextActivity.ActivityName,
-		nextActivity.Attempt, nextActivity.Status, nextActivity.IdempotencyKey,
+		nextActivity.Attempt, nextActivity.Status, nextActivity.IdempotencyKey, time.Now(),
 	)
 	if err != nil {
 		return err

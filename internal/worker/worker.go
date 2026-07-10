@@ -20,6 +20,15 @@ type ActivityContext struct {
 	context.Context
 	ExecutionID string
 	ActivityID  string
+	mq          *queue.RabbitMQ
+}
+
+func (c *ActivityContext) Heartbeat() error {
+	payload := map[string]string{
+		"execution_id": c.ExecutionID,
+		"activity_id":  c.ActivityID,
+	}
+	return c.mq.PublishHeartbeat(c.Context, payload)
 }
 
 type ActivityFunc func(ctx ActivityContext) error
@@ -111,6 +120,7 @@ func (w *Worker) Start(ctx context.Context) {
 							Context:     observability.Extract(ctx, delivery.Headers),
 							ExecutionID: task.ExecutionID,
 							ActivityID:  task.ActivityID,
+							mq:          w.mq,
 						}
 
 						observability.ActivitiesStartedTotal.Inc()
@@ -131,14 +141,18 @@ func (w *Worker) Start(ctx context.Context) {
 						res := models.ActivityResultMessage{
 							ExecutionID:  task.ExecutionID,
 							ActivityID:   task.ActivityID,
-							ActivityName: task.ActivityName,
-							Success:      err == nil,
+							ActivityName: activityName,
 						}
+
 						if err != nil {
 							slog.Error("Worker activity failed", "activity", activityName, "err", err)
 							res.Error = err.Error()
+							if _, ok := err.(*NonRetryableError); ok {
+								res.NonRetryable = true
+							}
 							observability.ActivitiesFailedTotal.Inc()
 						} else {
+							res.Success = true
 							slog.Info("Worker activity succeeded", "activity", activityName)
 							observability.ActivitiesCompletedTotal.Inc()
 						}

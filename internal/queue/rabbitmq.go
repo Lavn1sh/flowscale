@@ -14,7 +14,9 @@ const (
 	ResultsExchange      = "results.exchange"
 	DlqExchange          = "dlq.exchange"
 	RetryExchange        = "retry.exchange"
+	HeartbeatExchange    = "heartbeat.exchange"
 	ActivityResultsQueue = "activity.results.queue"
+	HeartbeatQueue       = "heartbeat.queue"
 )
 
 type RabbitMQ struct {
@@ -56,6 +58,9 @@ func (r *RabbitMQ) declareTopology() error {
 	if err := r.ch.ExchangeDeclare(RetryExchange, "headers", true, false, false, false, nil); err != nil {
 		return err
 	}
+	if err := r.ch.ExchangeDeclare(HeartbeatExchange, "topic", true, false, false, false, nil); err != nil {
+		return err
+	}
 
 	// Retry Tiered Parking Queues
 	retryTiers := []int{1, 2, 4, 8, 16}
@@ -87,6 +92,15 @@ func (r *RabbitMQ) declareTopology() error {
 		return err
 	}
 	if err := r.ch.QueueBind(ActivityResultsQueue, "result", ResultsExchange, false, nil); err != nil {
+		return err
+	}
+
+	// Heartbeat Queue
+	_, err = r.ch.QueueDeclare(HeartbeatQueue, true, false, false, false, nil)
+	if err != nil {
+		return err
+	}
+	if err := r.ch.QueueBind(HeartbeatQueue, "heartbeat", HeartbeatExchange, false, nil); err != nil {
 		return err
 	}
 
@@ -169,6 +183,19 @@ func (r *RabbitMQ) PublishResult(ctx context.Context, payload interface{}) error
 	})
 }
 
+func (r *RabbitMQ) PublishHeartbeat(ctx context.Context, payload interface{}) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	headers := observability.Inject(ctx, nil)
+	return r.ch.PublishWithContext(ctx, HeartbeatExchange, "heartbeat", false, false, amqp091.Publishing{
+		ContentType: "application/json",
+		Body:        body,
+		Headers:     headers,
+	})
+}
+
 func (r *RabbitMQ) ConsumeActivity(activityName string) (<-chan amqp091.Delivery, error) {
 	queueName := fmt.Sprintf("%s.queue", activityName)
 	return r.ch.Consume(queueName, "", false, false, false, false, nil)
@@ -176,6 +203,10 @@ func (r *RabbitMQ) ConsumeActivity(activityName string) (<-chan amqp091.Delivery
 
 func (r *RabbitMQ) ConsumeResults() (<-chan amqp091.Delivery, error) {
 	return r.ch.Consume(ActivityResultsQueue, "", false, false, false, false, nil)
+}
+
+func (r *RabbitMQ) ConsumeHeartbeats() (<-chan amqp091.Delivery, error) {
+	return r.ch.Consume(HeartbeatQueue, "", false, false, false, false, nil)
 }
 
 func (r *RabbitMQ) Close() {

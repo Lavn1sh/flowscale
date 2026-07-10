@@ -82,4 +82,5 @@ type ActivityResultMessage struct {
 	ActivityName string `json:"activity_name"`
 	Success      bool   `json:"success"`
 	Error        string `json:"error,omitempty"`
+	NonRetryable bool   `json:"non_retryable,omitempty"`
 }

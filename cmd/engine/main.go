@@ -69,6 +69,10 @@ func main() {
 	dlqHandler := api.NewDLQHandler(eng, execRepo)
 	scheduleHandler := api.NewScheduleHandler(repo)
 
+	// Start the Reaper in the background for activity timeout detection
+	reaper := engine.NewReaper(eng)
+	go reaper.Start(context.Background())
+
 	// Start Outbox Publisher
 	outboxPub := engine.NewOutboxPublisher(execRepo, mq)
 
