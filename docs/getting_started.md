@@ -28,8 +28,11 @@ migrate -path migrations -database "postgres://postgres:postgres@localhost:5432/
 The Engine acts as the API Server, Scheduler, and Activity Coordinator.
 
 ```sh
-# Run the API and Engine
+# On Linux / macOS (bash)
 ROLE=api,scheduler go run ./cmd/engine
+
+# On Windows (PowerShell)
+$env:ROLE="api,scheduler"; go run ./cmd/engine
 ```
 
 ## Step 4: Run the Workers
