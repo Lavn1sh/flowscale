@@ -178,3 +178,18 @@ func (r *RabbitMQ) Close() {
 		r.conn.Close()
 	}
 }
+
+func (r *RabbitMQ) Ping() error {
+	if r.conn == nil || r.conn.IsClosed() {
+		return fmt.Errorf("rabbitmq connection is closed")
+	}
+	return nil
+}
+
+func (r *RabbitMQ) GetQueueDepth(queueName string) (int, error) {
+	q, err := r.ch.QueueInspect(queueName)
+	if err != nil {
+		return 0, err
+	}
+	return q.Messages, nil
+}

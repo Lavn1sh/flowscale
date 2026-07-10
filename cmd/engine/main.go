@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"flowscale/config"
@@ -19,6 +21,7 @@ import (
 	"flowscale/logger"
 
 	_ "github.com/lib/pq"
+	"golang.org/x/time/rate"
 )
 
 func main() {
@@ -57,18 +60,16 @@ func main() {
 
 	// Start Outbox Publisher
 	outboxPub := engine.NewOutboxPublisher(execRepo, mq)
-	go outboxPub.Start(context.Background())
 
 	// Start Scheduler
 	sched := scheduler.NewScheduler(repo, eng)
 	sched.Start()
 	defer sched.Stop()
 
-	// Start result consumer
-	go eng.StartResultConsumer(context.Background())
+	// Result consumer is started below
 
 	// Milestone 4: Worker wiring via RabbitMQ
-	w := worker.NewWorker(mq, execRepo)
+	w := worker.NewWorker(mq, execRepo, 100)
 
 	w.RegisterActivity("reserve-inventory", func(ctx worker.ActivityContext) error {
 		slog.Info("Executing reserve-inventory", "executionID", ctx.ExecutionID)
@@ -100,9 +101,13 @@ func main() {
 		time.Sleep(1 * time.Second)
 		return fmt.Errorf("simulated shipment failure")
 	})
-	go w.Start(context.Background())
+
+	healthHandler := api.NewHealthHandler(db, mq)
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/live", healthHandler.Live)
+	mux.HandleFunc("/ready", healthHandler.Ready)
+	mux.HandleFunc("/health", healthHandler.Health)
 	mux.Handle("/workflows/start", execHandler)
 	mux.Handle("/executions", execHandler)
 	mux.Handle("/executions/", execHandler)
@@ -113,10 +118,53 @@ func main() {
 	mux.Handle("/schedules", scheduleHandler)
 	mux.Handle("/schedules/", scheduleHandler)
 
+	// Apply rate limiting (100 req/s, burst 50) and backpressure (queue > 5000)
+	limiter := rate.NewLimiter(rate.Limit(100), 50)
+	var handler http.Handler = mux
+	handler = api.BackpressureMiddleware(mq, 5000, handler)
+	handler = api.RateLimiterMiddleware(limiter, handler)
+
 	addr := ":" + cfg.Port
-	slog.Info("Starting Workflow Engine", "addr", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		slog.Error("Server failed", "error", err)
-		os.Exit(1)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: handler,
 	}
+
+	// Create root context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start components with root context
+	go outboxPub.Start(ctx)
+	go eng.StartResultConsumer(ctx)
+	go w.Start(ctx)
+
+	go func() {
+		slog.Info("Starting Workflow Engine", "addr", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("Server failed", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	// Wait for interrupt signal to gracefully shutdown the server
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	<-quit
+	slog.Info("Shutting down engine...")
+
+	// Cancel root context to stop background components
+	cancel()
+
+	// Shutdown HTTP server with a timeout
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("Server forced to shutdown", "error", err)
+	}
+
+	// Shutdown worker gracefully
+	w.Shutdown(shutdownCtx)
+
+	slog.Info("Engine exited gracefully")
 }
