@@ -68,8 +68,8 @@ func main() {
 
 	w.RegisterActivity("reserve-inventory", func(ctx worker.ActivityContext) error {
 		slog.Info("Executing reserve-inventory", "executionID", ctx.ExecutionID)
-		slog.Warn("Simulating failure for reserve-inventory")
-		return fmt.Errorf("simulated permanent failure")
+		time.Sleep(1 * time.Second)
+		return nil
 	})
 	w.RegisterActivity("charge-card", func(ctx worker.ActivityContext) error {
 		slog.Info("Executing charge-card", "executionID", ctx.ExecutionID)
@@ -81,10 +81,20 @@ func main() {
 		time.Sleep(1 * time.Second)
 		return nil
 	})
+	w.RegisterActivity("refund-payment", func(ctx worker.ActivityContext) error {
+		slog.Info("Executing refund-payment", "executionID", ctx.ExecutionID)
+		time.Sleep(1 * time.Second)
+		return nil
+	})
+	w.RegisterActivity("cancel-shipment", func(ctx worker.ActivityContext) error {
+		slog.Info("Executing cancel-shipment", "executionID", ctx.ExecutionID)
+		time.Sleep(1 * time.Second)
+		return nil
+	})
 	w.RegisterActivity("create-shipment", func(ctx worker.ActivityContext) error {
 		slog.Info("Executing create-shipment", "executionID", ctx.ExecutionID)
 		time.Sleep(1 * time.Second)
-		return nil
+		return fmt.Errorf("simulated shipment failure")
 	})
 	go w.Start(context.Background())
 

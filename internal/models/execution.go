@@ -35,7 +35,9 @@ const (
 	EventWorkflowFailed    EventType = "WORKFLOW_FAILED"
 	EventActivityScheduled EventType = "ACTIVITY_SCHEDULED"
 	EventActivityCompleted EventType = "ACTIVITY_COMPLETED"
-	EventActivityFailed    EventType = "ACTIVITY_FAILED"
+	EventActivityFailed        EventType = "ACTIVITY_FAILED"
+	EventCompensationStarted   EventType = "COMPENSATION_STARTED"
+	EventCompensationCompleted EventType = "COMPENSATION_COMPLETED"
 )
 
 type WorkflowExecution struct {

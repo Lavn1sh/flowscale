@@ -125,6 +125,55 @@ func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, e
 		return err
 	}
 
+	if exec.Status == models.ExecutionStatusCompensating {
+		acts, err := e.execRepo.ListActivityExecutions(ctx, executionID)
+		if err != nil {
+			return err
+		}
+
+		nextComp := determineNextCompensation(wf, acts)
+		now := time.Now()
+
+		if nextComp != nil {
+			nextExec := &models.ActivityExecution{
+				ID:             uuid.NewString(),
+				ExecutionID:    executionID,
+				ActivityName:   nextComp.Name,
+				Attempt:        1,
+				Status:         models.ActivityStatusPending,
+				IdempotencyKey: fmt.Sprintf("%s-%s-1", executionID, nextComp.Name),
+			}
+
+			event := &models.WorkflowEvent{
+				ID:          uuid.NewString(),
+				ExecutionID: executionID,
+				EventType:   models.EventCompensationStarted,
+				Payload:     []byte(`{"activity":"` + nextComp.Name + `"}`),
+				Timestamp:   now,
+			}
+
+			err = e.execRepo.StartCompensating(ctx, executionID, nextExec, event)
+			if err == nil {
+				e.mq.PublishTask(ctx, nextComp.Name, models.ActivityTaskMessage{
+					ExecutionID:    executionID,
+					ActivityID:     nextExec.ID,
+					ActivityName:   nextExec.ActivityName,
+					IdempotencyKey: nextExec.IdempotencyKey,
+				})
+			}
+			return err
+		} else {
+			event := &models.WorkflowEvent{
+				ID:          uuid.NewString(),
+				ExecutionID: executionID,
+				EventType:   models.EventCompensationCompleted,
+				Payload:     []byte(`{}`),
+				Timestamp:   now,
+			}
+			return e.execRepo.CompensatedExecution(ctx, executionID, event)
+		}
+	}
+
 	var nextAct *models.Activity
 	found := false
 	for i, act := range wf.Activities {
@@ -138,6 +187,7 @@ func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, e
 	}
 
 	if !found {
+		// if activityName is a compensation activity, then we shouldn't reach here because exec.Status would be COMPENSATING
 		return fmt.Errorf("activity %s not found in workflow definition", activityName)
 	}
 
@@ -207,6 +257,15 @@ func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, e
 	}
 
 	if wfAct == nil {
+		for i, a := range wf.Activities {
+			if a.Compensation == activityName {
+				wfAct = &wf.Activities[i]
+				break
+			}
+		}
+	}
+
+	if wfAct == nil {
 		return fmt.Errorf("activity %s not found in workflow definition", activityName)
 	}
 
@@ -267,7 +326,44 @@ func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, e
 		IdempotencyKey: act.IdempotencyKey,
 	})
 
+	acts, err := e.execRepo.ListActivityExecutions(ctx, executionID)
+	if err != nil {
+		return err
+	}
+
+	nextComp := determineNextCompensation(wf, acts)
 	now := time.Now()
+
+	if nextComp != nil && exec.Status != models.ExecutionStatusCompensating {
+		// Start compensating
+		nextExec := &models.ActivityExecution{
+			ID:             uuid.NewString(),
+			ExecutionID:    executionID,
+			ActivityName:   nextComp.Name,
+			Attempt:        1,
+			Status:         models.ActivityStatusPending,
+			IdempotencyKey: fmt.Sprintf("%s-%s-1", executionID, nextComp.Name),
+		}
+		event := &models.WorkflowEvent{
+			ID:          uuid.NewString(),
+			ExecutionID: executionID,
+			EventType:   models.EventCompensationStarted,
+			Payload:     []byte(`{"activity":"` + nextComp.Name + `"}`),
+			Timestamp:   now,
+		}
+		err = e.execRepo.StartCompensating(ctx, executionID, nextExec, event)
+		if err == nil {
+			e.mq.PublishTask(ctx, nextComp.Name, models.ActivityTaskMessage{
+				ExecutionID:    executionID,
+				ActivityID:     nextExec.ID,
+				ActivityName:   nextExec.ActivityName,
+				IdempotencyKey: nextExec.IdempotencyKey,
+			})
+		}
+		return err
+	}
+
+	// If already compensating or no compensations, fail workflow
 	event := &models.WorkflowEvent{
 		ID:          uuid.NewString(),
 		ExecutionID: executionID,
@@ -317,4 +413,125 @@ func (e *Engine) RetryDeadLetteredActivity(ctx context.Context, activityID strin
 		})
 	}
 	return err
+}
+
+func (e *Engine) RetryCompensation(ctx context.Context, executionID string) error {
+	exec, err := e.execRepo.GetExecution(ctx, executionID)
+	if err != nil {
+		return err
+	}
+
+	if exec.Status != models.ExecutionStatusFailed {
+		return fmt.Errorf("execution is not FAILED, cannot retry compensation")
+	}
+
+	acts, err := e.execRepo.ListActivityExecutions(ctx, executionID)
+	if err != nil {
+		return err
+	}
+
+	wf, err := e.wfRepo.GetWorkflow(ctx, exec.WorkflowID)
+	if err != nil {
+		return err
+	}
+
+	// Find the failed compensation activity
+	var failedComp *models.ActivityExecution
+	for _, act := range acts {
+		if act.DeadLetteredAt != nil {
+			// check if it's a compensation activity
+			isNormal := false
+			for _, wa := range wf.Activities {
+				if wa.Name == act.ActivityName {
+					isNormal = true
+					break
+				}
+			}
+			if !isNormal {
+				// it's a compensation activity!
+				failedComp = &act
+				break
+			}
+		}
+	}
+
+	if failedComp == nil {
+		return fmt.Errorf("no failed compensation activity found for execution %s", executionID)
+	}
+
+	nextAttempt := failedComp.Attempt + 1
+	nextExec := &models.ActivityExecution{
+		ID:             uuid.NewString(),
+		ExecutionID:    executionID,
+		ActivityName:   failedComp.ActivityName,
+		Attempt:        nextAttempt,
+		Status:         models.ActivityStatusPending,
+		IdempotencyKey: fmt.Sprintf("%s-%s-%d", executionID, failedComp.ActivityName, nextAttempt),
+	}
+
+	now := time.Now()
+	event := &models.WorkflowEvent{
+		ID:          uuid.NewString(),
+		ExecutionID: executionID,
+		EventType:   models.EventCompensationStarted,
+		Payload:     []byte(fmt.Sprintf(`{"activity":"%s","attempt":%d,"manual_retry":true}`, failedComp.ActivityName, nextAttempt)),
+		Timestamp:   now,
+	}
+
+	err = e.execRepo.StartCompensating(ctx, executionID, nextExec, event)
+	if err == nil {
+		e.mq.PublishTask(ctx, failedComp.ActivityName, models.ActivityTaskMessage{
+			ExecutionID:    executionID,
+			ActivityID:     nextExec.ID,
+			ActivityName:   nextExec.ActivityName,
+			IdempotencyKey: nextExec.IdempotencyKey,
+		})
+	}
+	return err
+}
+
+func determineNextCompensation(wf *models.Workflow, acts []models.ActivityExecution) *models.Activity {
+	var completedNormal []models.ActivityExecution
+	var completedComps = make(map[string]bool)
+
+	for _, a := range acts {
+		if a.Status == models.ActivityStatusCompleted || a.Status == models.ActivityStatusFailed {
+			isNormal := false
+			for _, wa := range wf.Activities {
+				if a.ActivityName == wa.Name {
+					isNormal = true
+					break
+				}
+			}
+			if isNormal {
+				if a.Status == models.ActivityStatusCompleted {
+					completedNormal = append(completedNormal, a)
+				}
+			} else {
+				completedComps[a.ActivityName] = true
+			}
+		}
+	}
+
+	for i := len(completedNormal) - 1; i >= 0; i-- {
+		actExec := completedNormal[i]
+		var wfAct *models.Activity
+		for j := range wf.Activities {
+			if wf.Activities[j].Name == actExec.ActivityName {
+				wfAct = &wf.Activities[j]
+				break
+			}
+		}
+
+		if wfAct != nil && wfAct.Compensation != "" {
+			if !completedComps[wfAct.Compensation] {
+				return &models.Activity{
+					Name:        wfAct.Compensation,
+					RetryPolicy: wfAct.RetryPolicy,
+					Timeout:     wfAct.Timeout,
+				}
+			}
+		}
+	}
+	return nil
 }

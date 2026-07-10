@@ -267,3 +267,91 @@ func (r *ExecutionRepo) FailExecution(ctx context.Context, executionID string, e
 
 	return tx.Commit()
 }
+
+func (r *ExecutionRepo) ListActivityExecutions(ctx context.Context, executionID string) ([]models.ActivityExecution, error) {
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT id, execution_id, activity_name, attempt, status, idempotency_key, started_at, completed_at, dead_lettered_at FROM activity_executions WHERE execution_id = $1 ORDER BY completed_at ASC NULLS LAST",
+		executionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var acts []models.ActivityExecution
+	for rows.Next() {
+		var act models.ActivityExecution
+		if err := rows.Scan(&act.ID, &act.ExecutionID, &act.ActivityName, &act.Attempt, &act.Status, &act.IdempotencyKey, &act.StartedAt, &act.CompletedAt, &act.DeadLetteredAt); err != nil {
+			return nil, err
+		}
+		acts = append(acts, act)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return acts, nil
+}
+
+func (r *ExecutionRepo) StartCompensating(ctx context.Context, executionID string, nextActivity *models.ActivityExecution, event *models.WorkflowEvent) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx,
+		`UPDATE workflow_executions SET status = $1, current_activity = $2, updated_at = $3 WHERE id = $4`,
+		models.ExecutionStatusCompensating, nextActivity.ActivityName, time.Now(), executionID,
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO activity_executions (id, execution_id, activity_name, attempt, status, idempotency_key)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		nextActivity.ID, nextActivity.ExecutionID, nextActivity.ActivityName,
+		nextActivity.Attempt, nextActivity.Status, nextActivity.IdempotencyKey,
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO workflow_events (id, execution_id, event_type, payload, timestamp)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		event.ID, event.ExecutionID, event.EventType, event.Payload, event.Timestamp,
+	)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (r *ExecutionRepo) CompensatedExecution(ctx context.Context, executionID string, event *models.WorkflowEvent) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx,
+		`UPDATE workflow_executions SET status = $1, updated_at = $2 WHERE id = $3`,
+		models.ExecutionStatusCompensated, time.Now(), executionID,
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO workflow_events (id, execution_id, event_type, payload, timestamp)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		event.ID, event.ExecutionID, event.EventType, event.Payload, event.Timestamp,
+	)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}

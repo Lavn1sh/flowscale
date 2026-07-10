@@ -36,6 +36,13 @@ func (h *ExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodPost && strings.HasPrefix(path, "executions/") && strings.HasSuffix(path, "/compensate/retry") {
+		id := strings.TrimPrefix(path, "executions/")
+		id = strings.TrimSuffix(id, "/compensate/retry")
+		h.handleRetryCompensation(w, r, id)
+		return
+	}
+
 	if r.Method == http.MethodGet && strings.HasPrefix(path, "executions/") {
 		id := strings.TrimPrefix(path, "executions/")
 		if id == "" {
@@ -108,4 +115,12 @@ func (h *ExecutionHandler) handleGetEvents(w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(events)
+}
+
+func (h *ExecutionHandler) handleRetryCompensation(w http.ResponseWriter, r *http.Request, executionID string) {
+	if err := h.engine.RetryCompensation(r.Context(), executionID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
