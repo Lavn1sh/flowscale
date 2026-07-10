@@ -12,6 +12,7 @@ const (
 	WorkflowExchange     = "workflow.exchange"
 	ResultsExchange      = "results.exchange"
 	DlqExchange          = "dlq.exchange"
+	RetryExchange        = "retry.exchange"
 	ActivityResultsQueue = "activity.results.queue"
 )
 
@@ -51,6 +52,33 @@ func (r *RabbitMQ) declareTopology() error {
 	if err := r.ch.ExchangeDeclare(DlqExchange, "fanout", true, false, false, false, nil); err != nil {
 		return err
 	}
+	if err := r.ch.ExchangeDeclare(RetryExchange, "headers", true, false, false, false, nil); err != nil {
+		return err
+	}
+
+	// Retry Tiered Parking Queues
+	retryTiers := []int{1, 2, 4, 8, 16}
+	for _, tier := range retryTiers {
+		queueName := fmt.Sprintf("retry.%ds.queue", tier)
+
+		args := amqp091.Table{
+			"x-message-ttl":          int32(tier * 1000), // ms
+			"x-dead-letter-exchange": WorkflowExchange,
+		}
+
+		_, err := r.ch.QueueDeclare(queueName, true, false, false, false, args)
+		if err != nil {
+			return err
+		}
+
+		bindArgs := amqp091.Table{
+			"x-match":    "all",
+			"delay-tier": tier,
+		}
+		if err := r.ch.QueueBind(queueName, "", RetryExchange, false, bindArgs); err != nil {
+			return err
+		}
+	}
 
 	// Global Results Queue
 	_, err := r.ch.QueueDeclare(ActivityResultsQueue, true, false, false, false, nil)
@@ -84,6 +112,20 @@ func (r *RabbitMQ) PublishTask(ctx context.Context, activityName string, payload
 	return r.ch.PublishWithContext(ctx, WorkflowExchange, activityName, false, false, amqp091.Publishing{
 		ContentType: "application/json",
 		Body:        body,
+	})
+}
+
+func (r *RabbitMQ) PublishRetryTask(ctx context.Context, activityName string, tier int, payload interface{}) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return r.ch.PublishWithContext(ctx, RetryExchange, activityName, false, false, amqp091.Publishing{
+		ContentType: "application/json",
+		Body:        body,
+		Headers: amqp091.Table{
+			"delay-tier": tier,
+		},
 	})
 }
 

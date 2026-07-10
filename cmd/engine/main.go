@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -56,8 +57,15 @@ func main() {
 
 	// Milestone 4: Worker wiring via RabbitMQ
 	w := worker.NewWorker(mq)
+
+	var reserveCounter int
 	w.RegisterActivity("reserve-inventory", func(ctx worker.ActivityContext) error {
 		slog.Info("Executing reserve-inventory", "executionID", ctx.ExecutionID)
+		reserveCounter++
+		if reserveCounter <= 2 {
+			slog.Warn("Simulating failure for reserve-inventory")
+			return fmt.Errorf("simulated failure %d", reserveCounter)
+		}
 		time.Sleep(1 * time.Second)
 		return nil
 	})

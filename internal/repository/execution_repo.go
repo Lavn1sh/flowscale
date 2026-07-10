@@ -68,6 +68,18 @@ func (r *ExecutionRepo) GetExecution(ctx context.Context, id string) (*models.Wo
 	return &exec, nil
 }
 
+func (r *ExecutionRepo) GetActivityExecution(ctx context.Context, activityID string) (*models.ActivityExecution, error) {
+	var act models.ActivityExecution
+	err := r.db.QueryRowContext(ctx,
+		"SELECT id, execution_id, activity_name, attempt, status, idempotency_key FROM activity_executions WHERE id = $1",
+		activityID,
+	).Scan(&act.ID, &act.ExecutionID, &act.ActivityName, &act.Attempt, &act.Status, &act.IdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	return &act, nil
+}
+
 func (r *ExecutionRepo) CompleteActivity(ctx context.Context, activityID string) error {
 	_, err := r.db.ExecContext(ctx,
 		"UPDATE activity_executions SET status = $1, completed_at = $2 WHERE id = $3",

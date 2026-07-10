@@ -183,6 +183,79 @@ func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, e
 }
 
 func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, executionID string, activityName string) error {
+	act, err := e.execRepo.GetActivityExecution(ctx, activityID)
+	if err != nil {
+		return fmt.Errorf("failed to get activity execution: %w", err)
+	}
+
+	exec, err := e.execRepo.GetExecution(ctx, executionID)
+	if err != nil {
+		return err
+	}
+
+	wf, err := e.wfRepo.GetWorkflow(ctx, exec.WorkflowID)
+	if err != nil {
+		return err
+	}
+
+	var wfAct *models.Activity
+	for i, a := range wf.Activities {
+		if a.Name == activityName {
+			wfAct = &wf.Activities[i]
+			break
+		}
+	}
+
+	if wfAct == nil {
+		return fmt.Errorf("activity %s not found in workflow definition", activityName)
+	}
+
+	maxAttempts := 1
+	if wfAct.RetryPolicy != nil && wfAct.RetryPolicy.MaxAttempts > 1 {
+		maxAttempts = wfAct.RetryPolicy.MaxAttempts
+	}
+
+	if act.Attempt < maxAttempts {
+		if err := e.execRepo.FailActivity(ctx, activityID); err != nil {
+			return err
+		}
+
+		nextAttempt := act.Attempt + 1
+		tier := 1 << (nextAttempt - 2)
+		if tier > 16 {
+			tier = 16
+		}
+
+		nextExec := &models.ActivityExecution{
+			ID:             uuid.NewString(),
+			ExecutionID:    executionID,
+			ActivityName:   activityName,
+			Attempt:        nextAttempt,
+			Status:         models.ActivityStatusPending,
+			IdempotencyKey: fmt.Sprintf("%s-%s-%d", executionID, activityName, nextAttempt),
+		}
+
+		now := time.Now()
+		event := &models.WorkflowEvent{
+			ID:          uuid.NewString(),
+			ExecutionID: executionID,
+			EventType:   models.EventActivityScheduled,
+			Payload:     []byte(fmt.Sprintf(`{"activity":"%s","attempt":%d}`, activityName, nextAttempt)),
+			Timestamp:   now,
+		}
+
+		err = e.execRepo.ScheduleNextActivity(ctx, executionID, nextExec, event)
+		if err == nil {
+			e.mq.PublishRetryTask(ctx, activityName, tier, models.ActivityTaskMessage{
+				ExecutionID:    executionID,
+				ActivityID:     nextExec.ID,
+				ActivityName:   nextExec.ActivityName,
+				IdempotencyKey: nextExec.IdempotencyKey,
+			})
+		}
+		return err
+	}
+
 	if err := e.execRepo.FailActivity(ctx, activityID); err != nil {
 		return err
 	}
