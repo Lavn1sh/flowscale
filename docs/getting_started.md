@@ -39,8 +39,11 @@ $env:ROLE="api,scheduler"; go run ./cmd/engine
 To process the workflow activities, you need to spin up the workers.
 
 ```sh
-# In a new terminal window
-go run ./cmd/worker
+# On Linux / macOS (bash)
+ROLE=worker go run ./cmd/engine
+
+# On Windows (PowerShell)
+$env:ROLE="worker"; go run ./cmd/engine
 ```
 
 ## Step 5: Start the Web UI
