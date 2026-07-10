@@ -14,6 +14,7 @@ import (
 	"flowscale/internal/engine"
 	"flowscale/internal/queue"
 	"flowscale/internal/repository"
+	"flowscale/internal/scheduler"
 	"flowscale/internal/worker"
 	"flowscale/logger"
 
@@ -52,6 +53,12 @@ func main() {
 	eng := engine.NewEngine(repo, execRepo, mq)
 	execHandler := api.NewExecutionHandler(eng, execRepo)
 	dlqHandler := api.NewDLQHandler(eng, execRepo)
+	scheduleHandler := api.NewScheduleHandler(repo)
+
+	// Start Scheduler
+	sched := scheduler.NewScheduler(repo, eng)
+	sched.Start()
+	defer sched.Stop()
 
 	// Start result consumer
 	go eng.StartResultConsumer(context.Background())
@@ -88,6 +95,8 @@ func main() {
 	mux.Handle("/workflows/", wfHandler)
 	mux.Handle("/activities/dlq", dlqHandler)
 	mux.Handle("/activities/dlq/", dlqHandler)
+	mux.Handle("/schedules", scheduleHandler)
+	mux.Handle("/schedules/", scheduleHandler)
 
 	addr := ":" + cfg.Port
 	slog.Info("Starting Workflow Engine", "addr", addr)

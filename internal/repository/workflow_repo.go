@@ -6,6 +6,7 @@ import (
 	"flowscale/internal/models"
 	"fmt"
 	_ "github.com/lib/pq"
+	"time"
 )
 
 type WorkflowRepo struct {
@@ -156,4 +157,106 @@ func (r *WorkflowRepo) DeleteWorkflow(ctx context.Context, id string) error {
 		return fmt.Errorf("workflow not found")
 	}
 	return nil
+}
+
+func (r *WorkflowRepo) CreateSchedule(ctx context.Context, schedule *models.Schedule) error {
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO scheduled_workflows (id, workflow_id, schedule_type, run_at, cron_expression, interval, next_run_at, status, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		schedule.ID, schedule.WorkflowID, schedule.ScheduleType, schedule.RunAt, schedule.CronExpression, schedule.Interval, schedule.NextRunAt, schedule.Status, schedule.CreatedAt, schedule.UpdatedAt,
+	)
+	return err
+}
+
+func (r *WorkflowRepo) ListSchedules(ctx context.Context) ([]models.Schedule, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, workflow_id, schedule_type, run_at, cron_expression, interval, next_run_at, status, created_at, updated_at FROM scheduled_workflows ORDER BY created_at DESC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var schedules []models.Schedule
+	for rows.Next() {
+		var s models.Schedule
+		var runAt sql.NullTime
+		var cronExpr, interval sql.NullString
+		if err := rows.Scan(&s.ID, &s.WorkflowID, &s.ScheduleType, &runAt, &cronExpr, &interval, &s.NextRunAt, &s.Status, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if runAt.Valid {
+			s.RunAt = &runAt.Time
+		}
+		if cronExpr.Valid {
+			s.CronExpression = cronExpr.String
+		}
+		if interval.Valid {
+			s.Interval = interval.String
+		}
+		schedules = append(schedules, s)
+	}
+	return schedules, nil
+}
+
+func (r *WorkflowRepo) DeleteSchedule(ctx context.Context, id string) error {
+	res, err := r.db.ExecContext(ctx, "DELETE FROM scheduled_workflows WHERE id = $1", id)
+	if err != nil {
+		return err
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("schedule not found")
+	}
+	return nil
+}
+
+func (r *WorkflowRepo) GetDueSchedules(ctx context.Context, now time.Time) ([]models.Schedule, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, workflow_id, schedule_type, run_at, cron_expression, interval, next_run_at, status, created_at, updated_at 
+		 FROM scheduled_workflows 
+		 WHERE next_run_at <= $1 AND status = 'ACTIVE'`,
+		now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var schedules []models.Schedule
+	for rows.Next() {
+		var s models.Schedule
+		var runAt sql.NullTime
+		var cronExpr, interval sql.NullString
+		if err := rows.Scan(&s.ID, &s.WorkflowID, &s.ScheduleType, &runAt, &cronExpr, &interval, &s.NextRunAt, &s.Status, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if runAt.Valid {
+			s.RunAt = &runAt.Time
+		}
+		if cronExpr.Valid {
+			s.CronExpression = cronExpr.String
+		}
+		if interval.Valid {
+			s.Interval = interval.String
+		}
+		schedules = append(schedules, s)
+	}
+	return schedules, nil
+}
+
+func (r *WorkflowRepo) UpdateScheduleState(ctx context.Context, id string, nextRunAt *time.Time, status string) error {
+	if nextRunAt != nil {
+		_, err := r.db.ExecContext(ctx,
+			"UPDATE scheduled_workflows SET next_run_at = $1, status = $2, updated_at = $3 WHERE id = $4",
+			*nextRunAt, status, time.Now(), id,
+		)
+		return err
+	}
+
+	_, err := r.db.ExecContext(ctx,
+		"UPDATE scheduled_workflows SET status = $1, updated_at = $2 WHERE id = $3",
+		status, time.Now(), id,
+	)
+	return err
 }
