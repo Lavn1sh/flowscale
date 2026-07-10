@@ -69,53 +69,72 @@ func main() {
 	dlqHandler := api.NewDLQHandler(eng, execRepo)
 	scheduleHandler := api.NewScheduleHandler(repo)
 
-	// Start the Reaper in the background for activity timeout detection
-	reaper := engine.NewReaper(eng)
-	go reaper.Start(context.Background())
+	role := os.Getenv("ROLE")
+	if role == "" {
+		role = "all"
+	}
+	slog.Info("Starting Flowscale component", "role", role)
 
-	// Start Outbox Publisher
-	outboxPub := engine.NewOutboxPublisher(execRepo, mq)
+	isAPI := role == "all" || role == "api"
+	isEngine := role == "all" || role == "engine"
+	isScheduler := role == "all" || role == "scheduler"
+	isWorker := role == "all" || role == "worker"
 
-	// Start Scheduler
-	sched := scheduler.NewScheduler(repo, eng)
-	sched.Start()
-	defer sched.Stop()
+	var sched *scheduler.Scheduler
+	var outboxPub *engine.OutboxPublisher
+	var reaper *engine.Reaper
+	var w *worker.Worker
 
-	// Result consumer is started below
+	if isEngine {
+		// Initialize the Reaper for activity timeout detection
+		reaper = engine.NewReaper(eng)
 
-	// Milestone 4: Worker wiring via RabbitMQ
-	w := worker.NewWorker(mq, execRepo, 100)
+		// Initialize Outbox Publisher
+		outboxPub = engine.NewOutboxPublisher(execRepo, mq)
+	}
 
-	w.RegisterActivity("reserve-inventory", func(ctx worker.ActivityContext) error {
-		slog.Info("Executing reserve-inventory", "executionID", ctx.ExecutionID)
-		time.Sleep(1 * time.Second)
-		return nil
-	})
-	w.RegisterActivity("charge-card", func(ctx worker.ActivityContext) error {
-		slog.Info("Executing charge-card", "executionID", ctx.ExecutionID)
-		time.Sleep(1 * time.Second)
-		return nil
-	})
-	w.RegisterActivity("release-inventory", func(ctx worker.ActivityContext) error {
-		slog.Info("Executing release-inventory", "executionID", ctx.ExecutionID)
-		time.Sleep(1 * time.Second)
-		return nil
-	})
-	w.RegisterActivity("refund-payment", func(ctx worker.ActivityContext) error {
-		slog.Info("Executing refund-payment", "executionID", ctx.ExecutionID)
-		time.Sleep(1 * time.Second)
-		return nil
-	})
-	w.RegisterActivity("cancel-shipment", func(ctx worker.ActivityContext) error {
-		slog.Info("Executing cancel-shipment", "executionID", ctx.ExecutionID)
-		time.Sleep(1 * time.Second)
-		return nil
-	})
-	w.RegisterActivity("create-shipment", func(ctx worker.ActivityContext) error {
-		slog.Info("Executing create-shipment", "executionID", ctx.ExecutionID)
-		time.Sleep(1 * time.Second)
-		return fmt.Errorf("simulated shipment failure")
-	})
+	if isScheduler {
+		// Start Scheduler
+		sched = scheduler.NewScheduler(repo, eng)
+		sched.Start()
+		defer sched.Stop()
+	}
+
+	if isWorker {
+		// Milestone 4: Worker wiring via RabbitMQ
+		w = worker.NewWorker(mq, execRepo, 100)
+
+		w.RegisterActivity("reserve-inventory", func(ctx worker.ActivityContext) error {
+			slog.Info("Executing reserve-inventory", "executionID", ctx.ExecutionID)
+			time.Sleep(1 * time.Second)
+			return nil
+		})
+		w.RegisterActivity("charge-card", func(ctx worker.ActivityContext) error {
+			slog.Info("Executing charge-card", "executionID", ctx.ExecutionID)
+			time.Sleep(1 * time.Second)
+			return nil
+		})
+		w.RegisterActivity("release-inventory", func(ctx worker.ActivityContext) error {
+			slog.Info("Executing release-inventory", "executionID", ctx.ExecutionID)
+			time.Sleep(1 * time.Second)
+			return nil
+		})
+		w.RegisterActivity("refund-payment", func(ctx worker.ActivityContext) error {
+			slog.Info("Executing refund-payment", "executionID", ctx.ExecutionID)
+			time.Sleep(1 * time.Second)
+			return nil
+		})
+		w.RegisterActivity("cancel-shipment", func(ctx worker.ActivityContext) error {
+			slog.Info("Executing cancel-shipment", "executionID", ctx.ExecutionID)
+			time.Sleep(1 * time.Second)
+			return nil
+		})
+		w.RegisterActivity("create-shipment", func(ctx worker.ActivityContext) error {
+			slog.Info("Executing create-shipment", "executionID", ctx.ExecutionID)
+			time.Sleep(1 * time.Second)
+			return fmt.Errorf("simulated shipment failure")
+		})
+	}
 
 	healthHandler := api.NewHealthHandler(db, mq)
 
@@ -123,26 +142,34 @@ func main() {
 	mux.HandleFunc("/live", healthHandler.Live)
 	mux.HandleFunc("/ready", healthHandler.Ready)
 	mux.HandleFunc("/health", healthHandler.Health)
-	mux.Handle("/workflows/start", execHandler)
-	mux.Handle("/executions", execHandler)
-	mux.Handle("/executions/", execHandler)
-	mux.Handle("/workflows", wfHandler)
-	mux.Handle("/workflows/", wfHandler)
-	mux.Handle("/activities/dlq", dlqHandler)
-	mux.Handle("/activities/dlq/", dlqHandler)
-	mux.Handle("/schedules", scheduleHandler)
-	mux.Handle("/schedules/", scheduleHandler)
-
 	mux.Handle("/metrics", promhttp.Handler())
+
+	if isAPI {
+		mux.Handle("/workflows/start", execHandler)
+		mux.Handle("/executions", execHandler)
+		mux.Handle("/executions/", execHandler)
+		mux.Handle("/workflows", wfHandler)
+		mux.Handle("/workflows/", wfHandler)
+		mux.Handle("/activities/dlq", dlqHandler)
+		mux.Handle("/activities/dlq/", dlqHandler)
+		mux.Handle("/schedules", scheduleHandler)
+		mux.Handle("/schedules/", scheduleHandler)
+	}
 
 	// Apply OTEL Tracing, Rate Limiting (100 req/s, burst 50), and Backpressure (queue > 5000)
 	limiter := rate.NewLimiter(rate.Limit(100), 50)
 	var handler http.Handler = mux
-	handler = otelhttp.NewHandler(handler, "engine-api")
-	handler = api.BackpressureMiddleware(mq, 5000, handler)
-	handler = api.RateLimiterMiddleware(limiter, handler)
+	if isAPI {
+		handler = otelhttp.NewHandler(handler, "engine-api")
+		handler = api.BackpressureMiddleware(mq, 5000, handler)
+		handler = api.RateLimiterMiddleware(limiter, handler)
+	}
 
 	addr := ":" + cfg.Port
+	if !isAPI {
+		addr = ":8081" // Default port for non-API health checks
+	}
+
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: handler,
@@ -153,9 +180,14 @@ func main() {
 	defer cancel()
 
 	// Start components with root context
-	go outboxPub.Start(ctx)
-	go eng.StartResultConsumer(ctx)
-	go w.Start(ctx)
+	if isEngine {
+		go outboxPub.Start(ctx)
+		go eng.StartResultConsumer(ctx)
+		go reaper.Start(ctx)
+	}
+	if isWorker {
+		go w.Start(ctx)
+	}
 
 	go func() {
 		slog.Info("Starting Workflow Engine", "addr", addr)
@@ -182,7 +214,9 @@ func main() {
 	}
 
 	// Shutdown worker gracefully
-	w.Shutdown(shutdownCtx)
+	if isWorker {
+		w.Shutdown(shutdownCtx)
+	}
 
 	slog.Info("Engine exited gracefully")
 }

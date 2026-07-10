@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: flowscale
+      role: worker
+  template:
+    metadata:
+      labels:
+        app: flowscale
+        role: worker
+    spec:
+      containers:
+      - name: worker
+        image: flowscale:latest
+        imagePullPolicy: Never
+        envFrom:
+        - configMapRef:
+            name: flowscale-config
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: flowscale-secrets
+              key: DATABASE_URL
+        - name: ROLE
+          value: "worker"
+        ports:
+        - containerPort: 8081
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "256Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+        livenessProbe:
+          httpGet:
+            path: /live
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
