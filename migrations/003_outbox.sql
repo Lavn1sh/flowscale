@@ -1,0 +1,8 @@
+DROP TABLE IF EXISTS outbox_messages;
+CREATE TABLE outbox_messages (
+    id UUID PRIMARY KEY,
+    topic VARCHAR(255) NOT NULL,
+    tier INT NOT NULL DEFAULT 0,
+    payload JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);

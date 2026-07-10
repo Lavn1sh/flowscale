@@ -16,7 +16,7 @@ func NewExecutionRepo(db *sql.DB) *ExecutionRepo {
 	return &ExecutionRepo{db: db}
 }
 
-func (r *ExecutionRepo) CreateExecution(ctx context.Context, exec *models.WorkflowExecution, initialEvent *models.WorkflowEvent, initialActivity *models.ActivityExecution) error {
+func (r *ExecutionRepo) CreateExecution(ctx context.Context, exec *models.WorkflowExecution, initialEvent *models.WorkflowEvent, initialActivity *models.ActivityExecution, outboxMsg *models.OutboxMessage) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -49,6 +49,12 @@ func (r *ExecutionRepo) CreateExecution(ctx context.Context, exec *models.Workfl
 			initialActivity.Attempt, initialActivity.Status, initialActivity.IdempotencyKey,
 		)
 		if err != nil {
+			return err
+		}
+	}
+
+	if outboxMsg != nil {
+		if err := r.InsertOutboxMessage(ctx, tx, *outboxMsg); err != nil {
 			return err
 		}
 	}
@@ -149,12 +155,28 @@ func (r *ExecutionRepo) FailActivity(ctx context.Context, activityID string) err
 	return err
 }
 
-func (r *ExecutionRepo) DeadLetterActivity(ctx context.Context, activityID string) error {
-	_, err := r.db.ExecContext(ctx,
+func (r *ExecutionRepo) DeadLetterActivity(ctx context.Context, activityID string, outboxMsg *models.OutboxMessage) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx,
 		"UPDATE activity_executions SET status = $1, dead_lettered_at = $2 WHERE id = $3",
 		models.ActivityStatusFailed, time.Now(), activityID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+
+	if outboxMsg != nil {
+		if err := r.InsertOutboxMessage(ctx, tx, *outboxMsg); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 func (r *ExecutionRepo) ListDeadLetteredActivities(ctx context.Context) ([]models.ActivityExecution, error) {
@@ -177,7 +199,7 @@ func (r *ExecutionRepo) ListDeadLetteredActivities(ctx context.Context) ([]model
 	return acts, rows.Err()
 }
 
-func (r *ExecutionRepo) ScheduleNextActivity(ctx context.Context, executionID string, nextActivity *models.ActivityExecution, event *models.WorkflowEvent) error {
+func (r *ExecutionRepo) RetryActivity(ctx context.Context, executionID string, nextActivity *models.ActivityExecution, event *models.WorkflowEvent, outboxMsg *models.OutboxMessage) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -209,6 +231,55 @@ func (r *ExecutionRepo) ScheduleNextActivity(ctx context.Context, executionID st
 	)
 	if err != nil {
 		return err
+	}
+
+	if outboxMsg != nil {
+		if err := r.InsertOutboxMessage(ctx, tx, *outboxMsg); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (r *ExecutionRepo) ScheduleNextActivity(ctx context.Context, executionID string, nextActivity *models.ActivityExecution, event *models.WorkflowEvent, outboxMsg *models.OutboxMessage) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx,
+		`UPDATE workflow_executions SET current_activity = $1, updated_at = $2 WHERE id = $3`,
+		nextActivity.ActivityName, time.Now(), executionID,
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO activity_executions (id, execution_id, activity_name, attempt, status, idempotency_key)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		nextActivity.ID, nextActivity.ExecutionID, nextActivity.ActivityName,
+		nextActivity.Attempt, nextActivity.Status, nextActivity.IdempotencyKey,
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO workflow_events (id, execution_id, event_type, payload, timestamp)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		event.ID, event.ExecutionID, event.EventType, event.Payload, event.Timestamp,
+	)
+	if err != nil {
+		return err
+	}
+
+	if outboxMsg != nil {
+		if err := r.InsertOutboxMessage(ctx, tx, *outboxMsg); err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit()
@@ -292,7 +363,7 @@ func (r *ExecutionRepo) ListActivityExecutions(ctx context.Context, executionID 
 	return acts, nil
 }
 
-func (r *ExecutionRepo) StartCompensating(ctx context.Context, executionID string, nextActivity *models.ActivityExecution, event *models.WorkflowEvent) error {
+func (r *ExecutionRepo) StartCompensating(ctx context.Context, executionID string, nextActivity *models.ActivityExecution, event *models.WorkflowEvent, outboxMsg *models.OutboxMessage) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -326,6 +397,12 @@ func (r *ExecutionRepo) StartCompensating(ctx context.Context, executionID strin
 		return err
 	}
 
+	if outboxMsg != nil {
+		if err := r.InsertOutboxMessage(ctx, tx, *outboxMsg); err != nil {
+			return err
+		}
+	}
+
 	return tx.Commit()
 }
 
@@ -354,4 +431,38 @@ func (r *ExecutionRepo) CompensatedExecution(ctx context.Context, executionID st
 	}
 
 	return tx.Commit()
+}
+
+func (r *ExecutionRepo) InsertOutboxMessage(ctx context.Context, tx *sql.Tx, msg models.OutboxMessage) error {
+	_, err := tx.ExecContext(ctx,
+		"INSERT INTO outbox_messages (id, topic, tier, payload) VALUES ($1, $2, $3, $4)",
+		msg.ID, msg.Topic, msg.Tier, msg.Payload,
+	)
+	return err
+}
+
+func (r *ExecutionRepo) GetPendingOutboxMessages(ctx context.Context, limit int) ([]models.OutboxMessage, error) {
+	rows, err := r.db.QueryContext(ctx,
+		"SELECT id, topic, tier, payload, created_at FROM outbox_messages ORDER BY created_at ASC LIMIT $1",
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []models.OutboxMessage
+	for rows.Next() {
+		var msg models.OutboxMessage
+		if err := rows.Scan(&msg.ID, &msg.Topic, &msg.Tier, &msg.Payload, &msg.CreatedAt); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs, rows.Err()
+}
+
+func (r *ExecutionRepo) DeleteOutboxMessage(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, "DELETE FROM outbox_messages WHERE id = $1", id)
+	return err
 }

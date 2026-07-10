@@ -63,17 +63,24 @@ func (e *Engine) StartWorkflow(ctx context.Context, workflowID string) (*models.
 		Timestamp:   now,
 	}
 
-	if err := e.execRepo.CreateExecution(ctx, exec, event, firstActivity); err != nil {
-		return nil, fmt.Errorf("failed to create execution: %w", err)
-	}
-
+	var outboxMsg *models.OutboxMessage
 	if firstActivity != nil {
-		e.mq.PublishTask(ctx, firstActivity.ActivityName, models.ActivityTaskMessage{
+		payload, _ := json.Marshal(models.ActivityTaskMessage{
 			ExecutionID:    exec.ID,
 			ActivityID:     firstActivity.ID,
 			ActivityName:   firstActivity.ActivityName,
 			IdempotencyKey: firstActivity.IdempotencyKey,
 		})
+		outboxMsg = &models.OutboxMessage{
+			ID:      uuid.NewString(),
+			Topic:   firstActivity.ActivityName,
+			Tier:    0,
+			Payload: payload,
+		}
+	}
+
+	if err := e.execRepo.CreateExecution(ctx, exec, event, firstActivity, outboxMsg); err != nil {
+		return nil, fmt.Errorf("failed to create execution: %w", err)
 	}
 
 	return exec, nil
@@ -161,16 +168,18 @@ func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, e
 				Timestamp:   now,
 			}
 
-			err = e.execRepo.StartCompensating(ctx, executionID, nextExec, event)
-			if err == nil {
-				e.mq.PublishTask(ctx, nextComp.Name, models.ActivityTaskMessage{
-					ExecutionID:    executionID,
-					ActivityID:     nextExec.ID,
-					ActivityName:   nextExec.ActivityName,
-					IdempotencyKey: nextExec.IdempotencyKey,
-				})
+			payload, _ := json.Marshal(models.ActivityTaskMessage{
+				ExecutionID:    executionID,
+				ActivityID:     nextExec.ID,
+				ActivityName:   nextExec.ActivityName,
+				IdempotencyKey: nextExec.IdempotencyKey,
+			})
+			outboxMsg := &models.OutboxMessage{
+				ID:      uuid.NewString(),
+				Topic:   nextComp.Name,
+				Payload: payload,
 			}
-			return err
+			return e.execRepo.StartCompensating(ctx, executionID, nextExec, event, outboxMsg)
 		} else {
 			event := &models.WorkflowEvent{
 				ID:          uuid.NewString(),
@@ -219,16 +228,18 @@ func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, e
 			Timestamp:   now,
 		}
 
-		err = e.execRepo.ScheduleNextActivity(ctx, executionID, nextExec, event)
-		if err == nil {
-			e.mq.PublishTask(ctx, nextExec.ActivityName, models.ActivityTaskMessage{
-				ExecutionID:    executionID,
-				ActivityID:     nextExec.ID,
-				ActivityName:   nextExec.ActivityName,
-				IdempotencyKey: nextExec.IdempotencyKey,
-			})
+		payload, _ := json.Marshal(models.ActivityTaskMessage{
+			ExecutionID:    executionID,
+			ActivityID:     nextExec.ID,
+			ActivityName:   nextExec.ActivityName,
+			IdempotencyKey: nextExec.IdempotencyKey,
+		})
+		outboxMsg := &models.OutboxMessage{
+			ID:      uuid.NewString(),
+			Topic:   nextExec.ActivityName,
+			Payload: payload,
 		}
-		return err
+		return e.execRepo.ScheduleNextActivity(ctx, executionID, nextExec, event, outboxMsg)
 	} else {
 		event := &models.WorkflowEvent{
 			ID:          uuid.NewString(),
@@ -317,28 +328,37 @@ func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, e
 			Timestamp:   now,
 		}
 
-		err = e.execRepo.ScheduleNextActivity(ctx, executionID, nextExec, event)
-		if err == nil {
-			e.mq.PublishRetryTask(ctx, activityName, tier, models.ActivityTaskMessage{
-				ExecutionID:    executionID,
-				ActivityID:     nextExec.ID,
-				ActivityName:   nextExec.ActivityName,
-				IdempotencyKey: nextExec.IdempotencyKey,
-			})
+		payload, _ := json.Marshal(models.ActivityTaskMessage{
+			ExecutionID:    executionID,
+			ActivityID:     nextExec.ID,
+			ActivityName:   nextExec.ActivityName,
+			IdempotencyKey: nextExec.IdempotencyKey,
+		})
+		outboxMsg := &models.OutboxMessage{
+			ID:      uuid.NewString(),
+			Topic:   activityName,
+			Tier:    tier,
+			Payload: payload,
 		}
-		return err
+		return e.execRepo.ScheduleNextActivity(ctx, executionID, nextExec, event, outboxMsg)
 	}
 
-	if err := e.execRepo.DeadLetterActivity(ctx, activityID); err != nil {
-		return err
-	}
-
-	e.mq.PublishDLQ(ctx, activityName, models.ActivityTaskMessage{
+	payload, _ := json.Marshal(models.ActivityTaskMessage{
 		ExecutionID:    executionID,
 		ActivityID:     activityID,
 		ActivityName:   activityName,
 		IdempotencyKey: act.IdempotencyKey,
 	})
+	outboxMsg := &models.OutboxMessage{
+		ID:      uuid.NewString(),
+		Topic:   activityName, // The publisher will use PublishDLQ for this? Wait, outbox publisher needs to know it's a DLQ message.
+		Tier:    -1, // We can use tier = -1 to signify a DLQ message
+		Payload: payload,
+	}
+
+	if err := e.execRepo.DeadLetterActivity(ctx, activityID, outboxMsg); err != nil {
+		return err
+	}
 
 	acts, err := e.execRepo.ListActivityExecutions(ctx, executionID)
 	if err != nil {
@@ -365,16 +385,18 @@ func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, e
 			Payload:     []byte(`{"activity":"` + nextComp.Name + `"}`),
 			Timestamp:   now,
 		}
-		err = e.execRepo.StartCompensating(ctx, executionID, nextExec, event)
-		if err == nil {
-			e.mq.PublishTask(ctx, nextComp.Name, models.ActivityTaskMessage{
-				ExecutionID:    executionID,
-				ActivityID:     nextExec.ID,
-				ActivityName:   nextExec.ActivityName,
-				IdempotencyKey: nextExec.IdempotencyKey,
-			})
+		payload, _ := json.Marshal(models.ActivityTaskMessage{
+			ExecutionID:    executionID,
+			ActivityID:     nextExec.ID,
+			ActivityName:   nextExec.ActivityName,
+			IdempotencyKey: nextExec.IdempotencyKey,
+		})
+		outboxMsg := &models.OutboxMessage{
+			ID:      uuid.NewString(),
+			Topic:   nextComp.Name,
+			Payload: payload,
 		}
-		return err
+		return e.execRepo.StartCompensating(ctx, executionID, nextExec, event, outboxMsg)
 	}
 
 	// If already compensating or no compensations, fail workflow
@@ -417,16 +439,18 @@ func (e *Engine) RetryDeadLetteredActivity(ctx context.Context, activityID strin
 		Timestamp:   now,
 	}
 
-	err = e.execRepo.ScheduleNextActivity(ctx, act.ExecutionID, nextExec, event)
-	if err == nil {
-		e.mq.PublishTask(ctx, act.ActivityName, models.ActivityTaskMessage{
-			ExecutionID:    act.ExecutionID,
-			ActivityID:     nextExec.ID,
-			ActivityName:   nextExec.ActivityName,
-			IdempotencyKey: nextExec.IdempotencyKey,
-		})
+	payload, _ := json.Marshal(models.ActivityTaskMessage{
+		ExecutionID:    act.ExecutionID,
+		ActivityID:     nextExec.ID,
+		ActivityName:   nextExec.ActivityName,
+		IdempotencyKey: nextExec.IdempotencyKey,
+	})
+	outboxMsg := &models.OutboxMessage{
+		ID:      uuid.NewString(),
+		Topic:   act.ActivityName,
+		Payload: payload,
 	}
-	return err
+	return e.execRepo.ScheduleNextActivity(ctx, act.ExecutionID, nextExec, event, outboxMsg)
 }
 
 func (e *Engine) RetryCompensation(ctx context.Context, executionID string) error {
@@ -492,16 +516,18 @@ func (e *Engine) RetryCompensation(ctx context.Context, executionID string) erro
 		Timestamp:   now,
 	}
 
-	err = e.execRepo.StartCompensating(ctx, executionID, nextExec, event)
-	if err == nil {
-		e.mq.PublishTask(ctx, failedComp.ActivityName, models.ActivityTaskMessage{
-			ExecutionID:    executionID,
-			ActivityID:     nextExec.ID,
-			ActivityName:   nextExec.ActivityName,
-			IdempotencyKey: nextExec.IdempotencyKey,
-		})
+	payload, _ := json.Marshal(models.ActivityTaskMessage{
+		ExecutionID:    executionID,
+		ActivityID:     nextExec.ID,
+		ActivityName:   nextExec.ActivityName,
+		IdempotencyKey: nextExec.IdempotencyKey,
+	})
+	outboxMsg := &models.OutboxMessage{
+		ID:      uuid.NewString(),
+		Topic:   failedComp.ActivityName,
+		Payload: payload,
 	}
-	return err
+	return e.execRepo.StartCompensating(ctx, executionID, nextExec, event, outboxMsg)
 }
 
 func determineNextCompensation(wf *models.Workflow, acts []models.ActivityExecution) *models.Activity {

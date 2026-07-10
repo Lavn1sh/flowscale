@@ -55,6 +55,10 @@ func main() {
 	dlqHandler := api.NewDLQHandler(eng, execRepo)
 	scheduleHandler := api.NewScheduleHandler(repo)
 
+	// Start Outbox Publisher
+	outboxPub := engine.NewOutboxPublisher(execRepo, mq)
+	go outboxPub.Start(context.Background())
+
 	// Start Scheduler
 	sched := scheduler.NewScheduler(repo, eng)
 	sched.Start()
