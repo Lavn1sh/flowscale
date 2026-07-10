@@ -6,6 +6,7 @@ import (
 )
 
 type ExecutionStatus string
+
 const (
 	ExecutionStatusPending      ExecutionStatus = "PENDING"
 	ExecutionStatusRunning      ExecutionStatus = "RUNNING"
@@ -17,18 +18,24 @@ const (
 )
 
 type ActivityStatus string
+
 const (
-	ActivityStatusPending  ActivityStatus = "PENDING"
-	ActivityStatusRunning  ActivityStatus = "RUNNING"
+	ActivityStatusPending   ActivityStatus = "PENDING"
+	ActivityStatusRunning   ActivityStatus = "RUNNING"
 	ActivityStatusCompleted ActivityStatus = "COMPLETED"
-	ActivityStatusFailed   ActivityStatus = "FAILED"
-	ActivityStatusRetrying ActivityStatus = "RETRYING"
+	ActivityStatusFailed    ActivityStatus = "FAILED"
+	ActivityStatusRetrying  ActivityStatus = "RETRYING"
 )
 
 type EventType string
+
 const (
-	EventWorkflowStarted    EventType = "WORKFLOW_STARTED"
-	EventActivityScheduled  EventType = "ACTIVITY_SCHEDULED"
+	EventWorkflowStarted   EventType = "WORKFLOW_STARTED"
+	EventWorkflowCompleted EventType = "WORKFLOW_COMPLETED"
+	EventWorkflowFailed    EventType = "WORKFLOW_FAILED"
+	EventActivityScheduled EventType = "ACTIVITY_SCHEDULED"
+	EventActivityCompleted EventType = "ACTIVITY_COMPLETED"
+	EventActivityFailed    EventType = "ACTIVITY_FAILED"
 )
 
 type WorkflowExecution struct {

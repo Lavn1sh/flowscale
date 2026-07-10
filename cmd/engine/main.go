@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"flowscale/config"
 	"flowscale/internal/api"
 	"flowscale/internal/engine"
 	"flowscale/internal/repository"
+	"flowscale/internal/worker"
 	"flowscale/logger"
 
 	_ "github.com/lib/pq"
@@ -34,10 +37,34 @@ func main() {
 
 	repo := repository.NewWorkflowRepo(db)
 	wfHandler := api.NewWorkflowHandler(repo)
-	
+
 	execRepo := repository.NewExecutionRepo(db)
 	eng := engine.NewEngine(repo, execRepo)
 	execHandler := api.NewExecutionHandler(eng, execRepo)
+
+	// Milestone 3: Local worker wiring
+	w := worker.NewWorker(eng)
+	w.RegisterActivity("reserve-inventory", func(ctx worker.ActivityContext) error {
+		slog.Info("Executing reserve-inventory", "executionID", ctx.ExecutionID)
+		time.Sleep(1 * time.Second)
+		return nil
+	})
+	w.RegisterActivity("charge-card", func(ctx worker.ActivityContext) error {
+		slog.Info("Executing charge-card", "executionID", ctx.ExecutionID)
+		time.Sleep(1 * time.Second)
+		return nil
+	})
+	w.RegisterActivity("release-inventory", func(ctx worker.ActivityContext) error {
+		slog.Info("Executing release-inventory", "executionID", ctx.ExecutionID)
+		time.Sleep(1 * time.Second)
+		return nil
+	})
+	w.RegisterActivity("create-shipment", func(ctx worker.ActivityContext) error {
+		slog.Info("Executing create-shipment", "executionID", ctx.ExecutionID)
+		time.Sleep(1 * time.Second)
+		return nil
+	})
+	go w.Start(context.Background())
 
 	mux := http.NewServeMux()
 	mux.Handle("/workflows/start", execHandler)

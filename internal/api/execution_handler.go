@@ -2,11 +2,11 @@ package api
 
 import (
 	"encoding/json"
-	"net/http"
 	"flowscale/internal/engine"
 	"flowscale/internal/repository"
-	"strings"
 	"log/slog"
+	"net/http"
+	"strings"
 )
 
 type StartWorkflowRequest struct {
@@ -24,7 +24,7 @@ func NewExecutionHandler(eng *engine.Engine, execRepo *repository.ExecutionRepo)
 
 func (h *ExecutionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/")
-	
+
 	if r.Method == http.MethodPost && path == "workflows/start" {
 		h.handleStart(w, r)
 		return

@@ -3,8 +3,8 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"flowscale/internal/models"
+	"fmt"
 	_ "github.com/lib/pq"
 )
 
@@ -24,7 +24,7 @@ func (r *WorkflowRepo) CreateWorkflow(ctx context.Context, wf *models.Workflow) 
 	defer tx.Rollback()
 
 	// Insert Workflow
-	_, err = tx.ExecContext(ctx, 
+	_, err = tx.ExecContext(ctx,
 		"INSERT INTO workflows (id, name) VALUES ($1, $2)",
 		wf.ID, wf.Name,
 	)
@@ -36,7 +36,7 @@ func (r *WorkflowRepo) CreateWorkflow(ctx context.Context, wf *models.Workflow) 
 	for i, act := range wf.Activities {
 		var maxAttempts sql.NullInt64
 		var backoffStrategy sql.NullString
-		
+
 		if act.RetryPolicy != nil {
 			maxAttempts.Int64 = int64(act.RetryPolicy.MaxAttempts)
 			maxAttempts.Valid = true
@@ -49,14 +49,14 @@ func (r *WorkflowRepo) CreateWorkflow(ctx context.Context, wf *models.Workflow) 
 			compActivity.String = act.Compensation
 			compActivity.Valid = true
 		}
-		
+
 		var timeout sql.NullString
 		if act.Timeout != "" {
 			timeout.String = act.Timeout
 			timeout.Valid = true
 		}
-        
-        actID := fmt.Sprintf("%s-act-%d", wf.ID, i) // simplistic ID for now
+
+		actID := fmt.Sprintf("%s-act-%d", wf.ID, i) // simplistic ID for now
 
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO activities (
@@ -84,7 +84,7 @@ func (r *WorkflowRepo) GetWorkflow(ctx context.Context, id string) (*models.Work
 		return nil, err
 	}
 
-	rows, err := r.db.QueryContext(ctx, 
+	rows, err := r.db.QueryContext(ctx,
 		`SELECT name, compensation_activity_name, retry_max_attempts, retry_backoff_strategy, timeout 
 		 FROM activities WHERE workflow_id = $1 ORDER BY position`, id)
 	if err != nil {
@@ -101,8 +101,12 @@ func (r *WorkflowRepo) GetWorkflow(ctx context.Context, id string) (*models.Work
 			return nil, err
 		}
 
-		if comp.Valid { act.Compensation = comp.String }
-		if timeout.Valid { act.Timeout = timeout.String }
+		if comp.Valid {
+			act.Compensation = comp.String
+		}
+		if timeout.Valid {
+			act.Timeout = timeout.String
+		}
 		if maxAttempts.Valid {
 			act.RetryPolicy = &models.RetryPolicy{
 				MaxAttempts:     int(maxAttempts.Int64),

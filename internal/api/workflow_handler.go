@@ -2,12 +2,12 @@ package api
 
 import (
 	"encoding/json"
-	"net/http"
-	"strings"
 	"flowscale/internal/models"
 	"flowscale/internal/repository"
 	"github.com/google/uuid"
 	"log/slog"
+	"net/http"
+	"strings"
 )
 
 type WorkflowHandler struct {
