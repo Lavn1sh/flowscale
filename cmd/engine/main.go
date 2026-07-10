@@ -11,6 +11,7 @@ import (
 	"flowscale/config"
 	"flowscale/internal/api"
 	"flowscale/internal/engine"
+	"flowscale/internal/queue"
 	"flowscale/internal/repository"
 	"flowscale/internal/worker"
 	"flowscale/logger"
@@ -35,15 +36,26 @@ func main() {
 	}
 	slog.Info("Connected to PostgreSQL")
 
+	mq, err := queue.NewRabbitMQ(cfg.RabbitMQURL)
+	if err != nil {
+		slog.Error("Failed to connect to RabbitMQ", "error", err)
+		os.Exit(1)
+	}
+	defer mq.Close()
+	slog.Info("Connected to RabbitMQ")
+
 	repo := repository.NewWorkflowRepo(db)
 	wfHandler := api.NewWorkflowHandler(repo)
 
 	execRepo := repository.NewExecutionRepo(db)
-	eng := engine.NewEngine(repo, execRepo)
+	eng := engine.NewEngine(repo, execRepo, mq)
 	execHandler := api.NewExecutionHandler(eng, execRepo)
 
-	// Milestone 3: Local worker wiring
-	w := worker.NewWorker(eng)
+	// Start result consumer
+	go eng.StartResultConsumer(context.Background())
+
+	// Milestone 4: Worker wiring via RabbitMQ
+	w := worker.NewWorker(mq)
 	w.RegisterActivity("reserve-inventory", func(ctx worker.ActivityContext) error {
 		slog.Info("Executing reserve-inventory", "executionID", ctx.ExecutionID)
 		time.Sleep(1 * time.Second)

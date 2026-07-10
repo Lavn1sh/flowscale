@@ -5,30 +5,24 @@ import (
 )
 
 type Config struct {
-	DatabaseURL string
 	Environment string
 	Port        string
+	DatabaseURL string
+	RabbitMQURL string
+}
+
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
 }
 
 func Load() *Config {
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://flowscale:password@localhost:5432/flowscale?sslmode=disable"
-	}
-
-	env := os.Getenv("ENVIRONMENT")
-	if env == "" {
-		env = "development"
-	}
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
 	return &Config{
-		DatabaseURL: dbURL,
-		Environment: env,
-		Port:        port,
+		Environment: getEnv("ENV", "development"),
+		Port:        getEnv("PORT", "8080"),
+		DatabaseURL: getEnv("DATABASE_URL", "postgres://flowscale:password@localhost:5432/flowscale?sslmode=disable"),
+		RabbitMQURL: getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
 	}
 }

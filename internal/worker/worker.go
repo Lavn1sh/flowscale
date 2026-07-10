@@ -2,11 +2,12 @@ package worker
 
 import (
 	"context"
-	"database/sql"
+	"encoding/json"
 	"log/slog"
-	"time"
 
-	"flowscale/internal/engine"
+	"flowscale/internal/models"
+	"flowscale/internal/queue"
+	"github.com/rabbitmq/amqp091-go"
 )
 
 type ActivityContext struct {
@@ -18,13 +19,13 @@ type ActivityContext struct {
 type ActivityFunc func(ctx ActivityContext) error
 
 type Worker struct {
-	engine     *engine.Engine
+	mq         *queue.RabbitMQ
 	activities map[string]ActivityFunc
 }
 
-func NewWorker(eng *engine.Engine) *Worker {
+func NewWorker(mq *queue.RabbitMQ) *Worker {
 	return &Worker{
-		engine:     eng,
+		mq:         mq,
 		activities: make(map[string]ActivityFunc),
 	}
 }
@@ -34,46 +35,63 @@ func (w *Worker) RegisterActivity(name string, fn ActivityFunc) {
 }
 
 func (w *Worker) Start(ctx context.Context) {
-	slog.Info("Worker started local polling loop")
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+	slog.Info("Worker started RabbitMQ consumer")
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			act, err := w.engine.PollPendingActivity(ctx)
-			if err != nil {
-				if err != sql.ErrNoRows {
-					slog.Error("Failed to poll activity", "err", err)
-				}
-				continue
-			}
+	for name, fn := range w.activities {
+		w.mq.RegisterActivityQueue(name)
 
-			slog.Info("Polled activity", "name", act.ActivityName, "id", act.ID)
-
-			fn, ok := w.activities[act.ActivityName]
-			if !ok {
-				slog.Error("Activity not registered", "name", act.ActivityName)
-				w.engine.ReportActivityFailure(ctx, act.ID, act.ExecutionID, act.ActivityName)
-				continue
-			}
-
-			actCtx := ActivityContext{
-				Context:     ctx,
-				ExecutionID: act.ExecutionID,
-				ActivityID:  act.ID,
-			}
-
-			err = fn(actCtx)
-			if err != nil {
-				slog.Error("Activity failed", "name", act.ActivityName, "err", err)
-				w.engine.ReportActivityFailure(ctx, act.ID, act.ExecutionID, act.ActivityName)
-			} else {
-				slog.Info("Activity succeeded", "name", act.ActivityName)
-				w.engine.ReportActivitySuccess(ctx, act.ID, act.ExecutionID, act.ActivityName)
-			}
+		msgs, err := w.mq.ConsumeActivity(name)
+		if err != nil {
+			slog.Error("failed to start consuming", "activity", name, "err", err)
+			continue
 		}
+
+		go func(activityName string, handler ActivityFunc, deliveries <-chan amqp091.Delivery) {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case d, ok := <-deliveries:
+					if !ok {
+						return // channel closed
+					}
+					var task models.ActivityTaskMessage
+					if err := json.Unmarshal(d.Body, &task); err != nil {
+						slog.Error("failed to unmarshal task", "err", err)
+						d.Nack(false, false)
+						continue
+					}
+
+					slog.Info("Worker received task", "activity", activityName, "id", task.ActivityID)
+
+					actCtx := ActivityContext{
+						Context:     ctx,
+						ExecutionID: task.ExecutionID,
+						ActivityID:  task.ActivityID,
+					}
+
+					err := handler(actCtx)
+					res := models.ActivityResultMessage{
+						ExecutionID:  task.ExecutionID,
+						ActivityID:   task.ActivityID,
+						ActivityName: task.ActivityName,
+						Success:      err == nil,
+					}
+					if err != nil {
+						slog.Error("Worker activity failed", "activity", activityName, "err", err)
+						res.Error = err.Error()
+					} else {
+						slog.Info("Worker activity succeeded", "activity", activityName)
+					}
+
+					if err := w.mq.PublishResult(ctx, res); err != nil {
+						slog.Error("failed to publish result", "err", err)
+						d.Nack(false, true) // requeue if we can't publish result
+					} else {
+						d.Ack(false)
+					}
+				}
+			}
+		}(name, fn, msgs)
 	}
 }

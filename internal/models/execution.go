@@ -66,3 +66,18 @@ type ActivityExecution struct {
 	CompletedAt    *time.Time     `json:"completed_at,omitempty"`
 	DeadLetteredAt *time.Time     `json:"dead_lettered_at,omitempty"`
 }
+
+type ActivityTaskMessage struct {
+	ExecutionID    string `json:"execution_id"`
+	ActivityID     string `json:"activity_id"`
+	ActivityName   string `json:"activity_name"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
+type ActivityResultMessage struct {
+	ExecutionID  string `json:"execution_id"`
+	ActivityID   string `json:"activity_id"`
+	ActivityName string `json:"activity_name"`
+	Success      bool   `json:"success"`
+	Error        string `json:"error,omitempty"`
+}

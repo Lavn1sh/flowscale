@@ -2,10 +2,13 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"flowscale/internal/models"
+	"flowscale/internal/queue"
 	"flowscale/internal/repository"
 	"github.com/google/uuid"
 )
@@ -13,10 +16,11 @@ import (
 type Engine struct {
 	wfRepo   *repository.WorkflowRepo
 	execRepo *repository.ExecutionRepo
+	mq       *queue.RabbitMQ
 }
 
-func NewEngine(wfRepo *repository.WorkflowRepo, execRepo *repository.ExecutionRepo) *Engine {
-	return &Engine{wfRepo: wfRepo, execRepo: execRepo}
+func NewEngine(wfRepo *repository.WorkflowRepo, execRepo *repository.ExecutionRepo, mq *queue.RabbitMQ) *Engine {
+	return &Engine{wfRepo: wfRepo, execRepo: execRepo, mq: mq}
 }
 
 func (e *Engine) StartWorkflow(ctx context.Context, workflowID string) (*models.WorkflowExecution, error) {
@@ -63,11 +67,47 @@ func (e *Engine) StartWorkflow(ctx context.Context, workflowID string) (*models.
 		return nil, fmt.Errorf("failed to create execution: %w", err)
 	}
 
+	if firstActivity != nil {
+		e.mq.PublishTask(ctx, firstActivity.ActivityName, models.ActivityTaskMessage{
+			ExecutionID:    exec.ID,
+			ActivityID:     firstActivity.ID,
+			ActivityName:   firstActivity.ActivityName,
+			IdempotencyKey: firstActivity.IdempotencyKey,
+		})
+	}
+
 	return exec, nil
 }
 
-func (e *Engine) PollPendingActivity(ctx context.Context) (*models.ActivityExecution, error) {
-	return e.execRepo.GetAndLockPendingActivity(ctx)
+func (e *Engine) StartResultConsumer(ctx context.Context) {
+	slog.Info("Engine started RabbitMQ result consumer")
+	deliveries, err := e.mq.ConsumeResults()
+	if err != nil {
+		slog.Error("Failed to start result consumer", "err", err)
+		return
+	}
+
+	for d := range deliveries {
+		var res models.ActivityResultMessage
+		if err := json.Unmarshal(d.Body, &res); err != nil {
+			slog.Error("Failed to unmarshal result message", "err", err)
+			d.Nack(false, false) // discard
+			continue
+		}
+
+		if res.Success {
+			err = e.ReportActivitySuccess(ctx, res.ActivityID, res.ExecutionID, res.ActivityName)
+		} else {
+			err = e.ReportActivityFailure(ctx, res.ActivityID, res.ExecutionID, res.ActivityName)
+		}
+
+		if err != nil {
+			slog.Error("Failed to process activity result", "err", err)
+			d.Nack(false, true) // requeue on DB error
+		} else {
+			d.Ack(false)
+		}
+	}
 }
 
 func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, executionID string, activityName string) error {
@@ -120,7 +160,16 @@ func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, e
 			Timestamp:   now,
 		}
 
-		return e.execRepo.ScheduleNextActivity(ctx, executionID, nextExec, event)
+		err = e.execRepo.ScheduleNextActivity(ctx, executionID, nextExec, event)
+		if err == nil {
+			e.mq.PublishTask(ctx, nextExec.ActivityName, models.ActivityTaskMessage{
+				ExecutionID:    executionID,
+				ActivityID:     nextExec.ID,
+				ActivityName:   nextExec.ActivityName,
+				IdempotencyKey: nextExec.IdempotencyKey,
+			})
+		}
+		return err
 	} else {
 		event := &models.WorkflowEvent{
 			ID:          uuid.NewString(),

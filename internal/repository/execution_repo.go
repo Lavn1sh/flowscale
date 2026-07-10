@@ -68,28 +68,6 @@ func (r *ExecutionRepo) GetExecution(ctx context.Context, id string) (*models.Wo
 	return &exec, nil
 }
 
-func (r *ExecutionRepo) GetAndLockPendingActivity(ctx context.Context) (*models.ActivityExecution, error) {
-	var act models.ActivityExecution
-	err := r.db.QueryRowContext(ctx, `
-		UPDATE activity_executions 
-		SET status = $1, started_at = $2 
-		WHERE id = (
-			SELECT id FROM activity_executions 
-			WHERE status = $3 
-			ORDER BY attempt ASC 
-			LIMIT 1 
-			FOR UPDATE SKIP LOCKED
-		)
-		RETURNING id, execution_id, activity_name, attempt, status, idempotency_key`,
-		models.ActivityStatusRunning, time.Now(), models.ActivityStatusPending,
-	).Scan(&act.ID, &act.ExecutionID, &act.ActivityName, &act.Attempt, &act.Status, &act.IdempotencyKey)
-
-	if err != nil {
-		return nil, err
-	}
-	return &act, nil
-}
-
 func (r *ExecutionRepo) CompleteActivity(ctx context.Context, activityID string) error {
 	_, err := r.db.ExecContext(ctx,
 		"UPDATE activity_executions SET status = $1, completed_at = $2 WHERE id = $3",
