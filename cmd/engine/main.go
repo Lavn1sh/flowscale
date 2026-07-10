@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,10 +24,10 @@ import (
 	"flowscale/logger"
 
 	"github.com/google/uuid"
-	"golang.org/x/crypto/bcrypt"
 	_ "github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/time/rate"
 )
 
@@ -86,10 +87,10 @@ func main() {
 	}
 	slog.Info("Starting Flowscale component", "role", role)
 
-	isAPI := role == "all" || role == "api"
-	isEngine := role == "all" || role == "engine"
-	isScheduler := role == "all" || role == "scheduler"
-	isWorker := role == "all" || role == "worker"
+	isAPI := role == "all" || strings.Contains(role, "api")
+	isEngine := role == "all" || strings.Contains(role, "engine")
+	isScheduler := role == "all" || strings.Contains(role, "scheduler")
+	isWorker := role == "all" || strings.Contains(role, "worker")
 
 	var sched *scheduler.Scheduler
 	var outboxPub *engine.OutboxPublisher
@@ -182,7 +183,7 @@ func main() {
 		handler = api.CorsMiddleware(handler)
 		// Wrap with Auth
 		handler = api.AuthMiddleware(handler)
-		
+
 		handler = otelhttp.NewHandler(handler, "engine-api")
 		handler = api.BackpressureMiddleware(mq, 5000, handler)
 		handler = api.RateLimiterMiddleware(limiter, handler)
