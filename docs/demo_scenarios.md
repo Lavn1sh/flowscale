@@ -14,6 +14,9 @@ The FlowScale engine already has built-in mock workers specifically designed for
 
 You can use these to create workflows in the Web UI that visually demonstrate the system's fault tolerance.
 
+> [!TIP]
+> **Quick Setup:** Instead of creating these manually, simply click the **"Seed Demos"** button in the Web UI, or press `g` in the TUI, to automatically populate all of the workflows and schedules below!
+
 ---
 
 ## 1. The Happy Path Demo (Order Processing)
@@ -150,3 +153,17 @@ This demonstrates how FlowScale can act as a highly reliable distributed cron sc
 5. Click Create.
 6. Now, navigate to the **Executions** tab and explain: *"FlowScale will now automatically trigger this workflow reliably every minute."*
 7. Wait 60 seconds and show the new executions appearing automatically in the list.
+
+---
+
+## 5. Heavy Batch Concurrency Demo
+
+This demonstrates FlowScale's ability to horizontally scale and process large batches of background tasks across multiple workers concurrently.
+
+**How to demo:**
+1. Ensure your system is running with multiple workers (e.g., `docker-compose up -d --scale flowscale-worker=3` or just run the default `docker-compose.yml` which has 3 workers configured).
+2. Go to the **Workflows** tab in the Web UI.
+3. Locate the `Heavy-Batch-Demo` workflow.
+4. Click the purple **Batch (10x)** button. This immediately triggers 10 concurrent executions, which creates 50 total activities in the message queue.
+5. Watch the **Executions** tab fill up rapidly.
+6. Open your terminal and run `docker-compose logs -f flowscale-worker-1 flowscale-worker-2 flowscale-worker-3` to show the audience how the tasks are being load-balanced perfectly across all independent nodes!

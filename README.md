@@ -1,36 +1,41 @@
 # FlowScale
 
-FlowScale is a high-performance, fault-tolerant workflow engine designed to execute long-running distributed processes with durability, retries, saga compensation, and scheduling.
+FlowScale is a high-performance, fault-tolerant workflow engine designed to execute long-running distributed processes with durability, retries, saga compensation, and scheduling. It tackles the challenges of distributed coordination and asynchronous state execution natively in Go.
 
-Built as an exploration of workflow engine internals, it tackles the challenges of distributed coordination and asynchronous state execution without relying on existing workflow frameworks.
+![FlowScale Dashboard](./docs/assets/dashboard.png) *(Note: this is a conceptual screenshot of the Web UI)*
 
-## Project Structure
-- **Backend (Engine)**: Written in Go, it coordinates tasks, persists state in PostgreSQL, and enqueues activities in RabbitMQ.
-- **Workers**: A Go SDK to write and execute activities efficiently.
-- **API & Core Data**: Complete RESTful interface over engine capabilities.
-- **Web UI**: A React-based Single Page Application (SPA) providing a beautiful dashboard for operators.
-- **Terminal UI**: A blazing-fast `bubbletea` CLI for terminal power users.
+## Core Capabilities
 
-## Features
-- **Durable Executions**: Workflows can run for seconds or weeks, surviving restarts without losing state.
-- **Retries & DLQ**: Configurable retry policies. Failed activities go to a Dead Letter Queue (DLQ) for manual intervention.
-- **Saga Compensation**: Supports long-running transactions by rolling back state automatically via predefined compensation activities.
-- **Distributed Coordination**: RabbitMQ handles task dispatch. Scalable by adding more workers.
-- **Observability**: OpenTelemetry tracing and structured JSON logging built-in.
-- **Cron Scheduling**: Execute recurring workflows on fixed schedules.
+- **Durable State Machine**: Workflows can run for seconds or weeks, surviving process restarts or crashes.
+- **Horizontal Scalability**: RabbitMQ message broker distributes tasks across independent Worker nodes. Add as many workers as needed.
+- **Resilience**: Configurable retries with exponential backoffs, Dead Letter Queues (DLQ) for manual intervention, and automated Saga Compensations for distributed transactions.
+- **Cron Scheduling**: Execute recurring workflows on fixed schedules automatically.
+- **Multi-Interface**: Interact via a beautiful React web dashboard, a fast Terminal UI (TUI), or a comprehensive REST API.
 
-## Documentation
-Dive deeper into the system internals and API:
+## Documentation Index
 
-- [Getting Started Guide](docs/getting_started.md) - Learn how to run the project locally.
-- [API Documentation](docs/api.md) - Complete reference of the REST API endpoints.
-- [System Architecture](architecture.md) - Detailed breakdown of components and message flow.
-- [Workflow Execution Detail](workflow_execution.md) - Deep dive into how a workflow state machine advances.
-- [Milestones & Spec](spec.md) - Project spec and milestones.
+We have comprehensive documentation available in the `/docs` directory:
 
-## Technologies Used
-- **Go** - Backend Engine, Workers, TUI
-- **React / TypeScript / Vite** - Web Application
-- **PostgreSQL** - Persistence and distributed locking
-- **RabbitMQ** - Distributed queues
-- **BubbleTea** - Terminal UI
+- [**1. Getting Started**](docs/getting_started.md) - How to spin up FlowScale locally using Docker Compose.
+- [**2. Architecture & Design**](docs/architecture.md) - Visual diagrams and explanations of the internal components.
+- [**3. How It Works**](docs/how_it_works.md) - Deep dive into workflow execution, the state machine, and scheduling.
+- [**4. Clients & Usage**](docs/clients.md) - Guide on using the Web UI, TUI, and HTTP API.
+- [**5. Demo Scenarios**](docs/demo_scenarios.md) - Walkthrough of the built-in demos (Heavy Batch, Saga, Retry, etc.).
+
+## Quick Start
+
+You can run the entire distributed stack locally using Docker Compose:
+
+```bash
+docker-compose up -d --build
+```
+
+Then visit [http://localhost:5173](http://localhost:5173) to view the web application!
+
+## Technologies
+
+- **Backend Engine & Workers**: Go (Golang)
+- **Web Dashboard**: React, TypeScript, Vite, TailwindCSS
+- **Terminal UI**: BubbleTea (Charm)
+- **Data Persistence**: PostgreSQL
+- **Message Broker**: RabbitMQ
