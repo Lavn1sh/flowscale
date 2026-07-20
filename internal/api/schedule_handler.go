@@ -31,6 +31,16 @@ func (h *ScheduleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleList(w, r)
 		return
 	}
+	if r.Method == http.MethodPost && strings.HasPrefix(path, "schedules/") && strings.HasSuffix(path, "/pause") {
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "schedules/"), "/pause")
+		h.handlePause(w, r, id)
+		return
+	}
+	if r.Method == http.MethodPost && strings.HasPrefix(path, "schedules/") && strings.HasSuffix(path, "/resume") {
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "schedules/"), "/resume")
+		h.handleResume(w, r, id)
+		return
+	}
 	if r.Method == http.MethodDelete && strings.HasPrefix(path, "schedules/") {
 		id := strings.TrimPrefix(path, "schedules/")
 		h.handleDelete(w, r, id)
@@ -113,4 +123,20 @@ func (h *ScheduleHandler) handleDelete(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *ScheduleHandler) handlePause(w http.ResponseWriter, r *http.Request, id string) {
+	if err := h.repo.UpdateScheduleState(r.Context(), id, nil, models.ScheduleStatusPaused); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *ScheduleHandler) handleResume(w http.ResponseWriter, r *http.Request, id string) {
+	if err := h.repo.UpdateScheduleState(r.Context(), id, nil, models.ScheduleStatusActive); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }

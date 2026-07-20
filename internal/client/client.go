@@ -86,6 +86,12 @@ func (c *Client) ListWorkflows() ([]models.Workflow, error) {
 	return out, err
 }
 
+func (c *Client) CreateWorkflow(w models.Workflow) (*models.Workflow, error) {
+	var out models.Workflow
+	err := c.do("POST", "/workflows", w, &out)
+	return &out, err
+}
+
 func (c *Client) StartWorkflow(id string) (*models.WorkflowExecution, error) {
 	var out models.WorkflowExecution
 	req := map[string]string{"workflow_id": id}
@@ -156,4 +162,25 @@ func (c *Client) CreateSchedule(sched models.Schedule) (*models.Schedule, error)
 
 func (c *Client) DeleteSchedule(id string) error {
 	return c.do("DELETE", "/schedules/"+id, nil, nil)
+}
+
+func (c *Client) PauseSchedule(id string) error {
+	return c.do("POST", "/schedules/"+id+"/pause", nil, nil)
+}
+
+func (c *Client) ResumeSchedule(id string) error {
+	return c.do("POST", "/schedules/"+id+"/resume", nil, nil)
+}
+
+// Demo
+func (c *Client) GetShipmentStatus() (bool, error) {
+	var out struct {
+		Down bool `json:"down"`
+	}
+	err := c.do("GET", "/demo/shipment-status", nil, &out)
+	return out.Down, err
+}
+
+func (c *Client) SetShipmentStatus(down bool) error {
+	return c.do("POST", "/demo/shipment-status", map[string]bool{"down": down}, nil)
 }

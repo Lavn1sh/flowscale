@@ -35,6 +35,10 @@ func (h *WorkflowHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleGet(w, r, path)
 		return
 	}
+	if r.Method == http.MethodPut && path != "" {
+		h.handleUpdate(w, r, path)
+		return
+	}
 	if r.Method == http.MethodDelete && path != "" {
 		h.handleDelete(w, r, path)
 		return
@@ -64,6 +68,29 @@ func (h *WorkflowHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(wf)
+}
+
+func (h *WorkflowHandler) handleUpdate(w http.ResponseWriter, r *http.Request, id string) {
+	var wf models.Workflow
+	if err := json.NewDecoder(r.Body).Decode(&wf); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	if wf.Name == "" {
+		http.Error(w, "workflow name is required", http.StatusBadRequest)
+		return
+	}
+
+	wf.ID = id
+
+	if err := h.repo.UpdateWorkflow(r.Context(), &wf); err != nil {
+		slog.Error("failed to update workflow", "err", err)
+		http.Error(w, "failed to update workflow", http.StatusInternalServerError)
+		return
+	}
+
 	json.NewEncoder(w).Encode(wf)
 }
 

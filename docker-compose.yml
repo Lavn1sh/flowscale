@@ -1,4 +1,5 @@
 version: '3.8'
+
 services:
   postgres:
     image: postgres:15-alpine
@@ -21,6 +22,81 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    image: migrate/migrate
+    volumes:
+      - ./migrations:/migrations
+    command:
+      - -path=/migrations/
+      - -database=postgres://flowscale:password@postgres:5432/flowscale?sslmode=disable
+      - up
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  flowscale-api:
+    build: .
+    environment:
+      - ROLE=api,scheduler,engine
+      - DATABASE_URL=postgres://flowscale:password@postgres:5432/flowscale?sslmode=disable
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - PORT=8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  flowscale-worker-1:
+    build: .
+    environment:
+      - ROLE=worker
+      - DATABASE_URL=postgres://flowscale:password@postgres:5432/flowscale?sslmode=disable
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      flowscale-api:
+        condition: service_started
+
+  flowscale-worker-2:
+    build: .
+    environment:
+      - ROLE=worker
+      - DATABASE_URL=postgres://flowscale:password@postgres:5432/flowscale?sslmode=disable
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      flowscale-api:
+        condition: service_started
+
+  flowscale-worker-3:
+    build: .
+    environment:
+      - ROLE=worker
+      - DATABASE_URL=postgres://flowscale:password@postgres:5432/flowscale?sslmode=disable
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      flowscale-api:
+        condition: service_started
+
+  flowscale-web:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./web:/app
+    ports:
+      - "5173:5173"
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - flowscale-api
 
 volumes:
   pgdata:

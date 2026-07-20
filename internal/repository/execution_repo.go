@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"flowscale/internal/models"
 )
 
@@ -111,6 +112,17 @@ func (r *ExecutionRepo) CreateExecution(ctx context.Context, exec *models.Workfl
 		if err != nil {
 			return err
 		}
+
+		schedEventID := uuid.NewString()
+		payload := []byte(`{"activity":"` + initialActivity.ActivityName + `"}`)
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO workflow_events (id, execution_id, event_type, payload, timestamp)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			schedEventID, initialActivity.ExecutionID, models.EventActivityScheduled, payload, time.Now(),
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	if outboxMsg != nil {
@@ -125,8 +137,8 @@ func (r *ExecutionRepo) CreateExecution(ctx context.Context, exec *models.Workfl
 func (r *ExecutionRepo) GetExecution(ctx context.Context, id string) (*models.WorkflowExecution, error) {
 	var exec models.WorkflowExecution
 	err := r.db.QueryRowContext(ctx,
-		"SELECT id, workflow_id, status, current_activity, created_at, updated_at FROM workflow_executions WHERE id = $1", id,
-	).Scan(&exec.ID, &exec.WorkflowID, &exec.Status, &exec.CurrentActivity, &exec.CreatedAt, &exec.UpdatedAt)
+		"SELECT e.id, e.workflow_id, w.name, e.status, e.current_activity, e.created_at, e.updated_at FROM workflow_executions e JOIN workflows w ON w.id = e.workflow_id WHERE e.id = $1", id,
+	).Scan(&exec.ID, &exec.WorkflowID, &exec.WorkflowName, &exec.Status, &exec.CurrentActivity, &exec.CreatedAt, &exec.UpdatedAt)
 
 	if err != nil {
 		return nil, err
@@ -135,19 +147,30 @@ func (r *ExecutionRepo) GetExecution(ctx context.Context, id string) (*models.Wo
 }
 
 func (r *ExecutionRepo) ListExecutions(ctx context.Context, status, workflowID, timeRange string, limit, offset int) ([]models.WorkflowExecution, error) {
-	query := "SELECT id, workflow_id, status, current_activity, created_at, updated_at FROM workflow_executions"
+	query := "SELECT e.id, e.workflow_id, w.name, e.status, e.current_activity, e.created_at, e.updated_at FROM workflow_executions e JOIN workflows w ON w.id = e.workflow_id"
 	var conditions []string
 	var args []interface{}
 	argID := 1
 
 	if status != "" {
-		conditions = append(conditions, fmt.Sprintf("status = $%d", argID))
-		args = append(args, status)
-		argID++
+		statuses := strings.Split(status, ",")
+		if len(statuses) == 1 {
+			conditions = append(conditions, fmt.Sprintf("e.status = $%d", argID))
+			args = append(args, status)
+			argID++
+		} else {
+			var placeholders []string
+			for _, s := range statuses {
+				placeholders = append(placeholders, fmt.Sprintf("$%d", argID))
+				args = append(args, strings.TrimSpace(s))
+				argID++
+			}
+			conditions = append(conditions, fmt.Sprintf("e.status IN (%s)", strings.Join(placeholders, ",")))
+		}
 	}
 
 	if workflowID != "" {
-		conditions = append(conditions, fmt.Sprintf("workflow_id = $%d", argID))
+		conditions = append(conditions, fmt.Sprintf("e.workflow_id = $%d", argID))
 		args = append(args, workflowID)
 		argID++
 	}
@@ -163,7 +186,7 @@ func (r *ExecutionRepo) ListExecutions(ctx context.Context, status, workflowID, 
 			d = -7 * 24 * time.Hour
 		}
 		if d != 0 {
-			conditions = append(conditions, fmt.Sprintf("created_at >= $%d", argID))
+			conditions = append(conditions, fmt.Sprintf("e.created_at >= $%d", argID))
 			args = append(args, time.Now().Add(d))
 			argID++
 		}
@@ -173,7 +196,7 @@ func (r *ExecutionRepo) ListExecutions(ctx context.Context, status, workflowID, 
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	query += " ORDER BY created_at DESC"
+	query += " ORDER BY e.created_at DESC"
 	
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT $%d", argID)
@@ -196,7 +219,7 @@ func (r *ExecutionRepo) ListExecutions(ctx context.Context, status, workflowID, 
 	for rows.Next() {
 		var exec models.WorkflowExecution
 		var curActivity sql.NullString
-		if err := rows.Scan(&exec.ID, &exec.WorkflowID, &exec.Status, &curActivity, &exec.CreatedAt, &exec.UpdatedAt); err != nil {
+		if err := rows.Scan(&exec.ID, &exec.WorkflowID, &exec.WorkflowName, &exec.Status, &curActivity, &exec.CreatedAt, &exec.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if curActivity.Valid {
@@ -248,23 +271,61 @@ func (r *ExecutionRepo) GetActivityExecution(ctx context.Context, activityID str
 	return &act, nil
 }
 
-func (r *ExecutionRepo) CompleteActivity(ctx context.Context, activityID string) error {
-	_, err := r.db.ExecContext(ctx,
+func (r *ExecutionRepo) CompleteActivity(ctx context.Context, activityID string, event *models.WorkflowEvent) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx,
 		"UPDATE activity_executions SET status = $1, completed_at = $2 WHERE id = $3",
 		models.ActivityStatusCompleted, time.Now(), activityID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO workflow_events (id, execution_id, event_type, payload, timestamp)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		event.ID, event.ExecutionID, event.EventType, event.Payload, event.Timestamp,
+	)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
-func (r *ExecutionRepo) FailActivity(ctx context.Context, activityID string) error {
-	_, err := r.db.ExecContext(ctx,
+func (r *ExecutionRepo) FailActivity(ctx context.Context, activityID string, event *models.WorkflowEvent) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.ExecContext(ctx,
 		"UPDATE activity_executions SET status = $1 WHERE id = $2",
 		models.ActivityStatusFailed, activityID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO workflow_events (id, execution_id, event_type, payload, timestamp)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		event.ID, event.ExecutionID, event.EventType, event.Payload, event.Timestamp,
+	)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
-func (r *ExecutionRepo) DeadLetterActivity(ctx context.Context, activityID string, outboxMsg *models.OutboxMessage) error {
+func (r *ExecutionRepo) DeadLetterActivity(ctx context.Context, activityID string, event *models.WorkflowEvent, outboxMsg *models.OutboxMessage) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -274,6 +335,15 @@ func (r *ExecutionRepo) DeadLetterActivity(ctx context.Context, activityID strin
 	_, err = tx.ExecContext(ctx,
 		"UPDATE activity_executions SET status = $1, dead_lettered_at = $2 WHERE id = $3",
 		models.ActivityStatusFailed, time.Now(), activityID,
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO workflow_events (id, execution_id, event_type, payload, timestamp)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		event.ID, event.ExecutionID, event.EventType, event.Payload, event.Timestamp,
 	)
 	if err != nil {
 		return err
@@ -308,7 +378,7 @@ func (r *ExecutionRepo) ListDeadLetteredActivities(ctx context.Context) ([]model
 	return acts, rows.Err()
 }
 
-func (r *ExecutionRepo) RetryActivity(ctx context.Context, executionID string, nextActivity *models.ActivityExecution, event *models.WorkflowEvent, outboxMsg *models.OutboxMessage) error {
+func (r *ExecutionRepo) RetryActivity(ctx context.Context, executionID string, newStatus models.ExecutionStatus, nextActivity *models.ActivityExecution, event *models.WorkflowEvent, outboxMsg *models.OutboxMessage) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -316,8 +386,8 @@ func (r *ExecutionRepo) RetryActivity(ctx context.Context, executionID string, n
 	defer tx.Rollback()
 
 	_, err = tx.ExecContext(ctx,
-		`UPDATE workflow_executions SET current_activity = $1, updated_at = $2 WHERE id = $3`,
-		nextActivity.ActivityName, time.Now(), executionID,
+		`UPDATE workflow_executions SET current_activity = $1, status = $2, updated_at = $3 WHERE id = $4`,
+		nextActivity.ActivityName, newStatus, time.Now(), executionID,
 	)
 	if err != nil {
 		return err

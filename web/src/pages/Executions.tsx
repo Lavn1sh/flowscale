@@ -16,8 +16,21 @@ const Executions = () => {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [workflowFilter, setWorkflowFilter] = useState('');
+  const [workflows, setWorkflows] = useState<{id: string, name: string}[]>([]);
   const [page, setPage] = useState(0);
   const pageSize = 10;
+  
+  useEffect(() => {
+    const fetchWorkflows = async () => {
+      try {
+        const res = await api.get('/workflows');
+        setWorkflows(res.data);
+      } catch (e) {
+        console.error('Failed to fetch workflows', e);
+      }
+    };
+    fetchWorkflows();
+  }, []);
   
   const fetchExecutions = async () => {
     try {
@@ -38,16 +51,18 @@ const Executions = () => {
 
   useEffect(() => {
     fetchExecutions();
+    const interval = setInterval(fetchExecutions, 3000);
+    return () => clearInterval(interval);
   }, [statusFilter, workflowFilter, page]);
 
   const getStatusBadgeClass = (status: string) => {
     switch(status) {
-      case 'COMPLETED': return 'badge-success';
-      case 'FAILED': return 'badge-danger';
-      case 'RUNNING': return 'badge-info';
-      case 'COMPENSATING': return 'badge-warning';
-      case 'CANCELLED': return 'badge-neutral';
-      default: return 'badge-neutral';
+      case 'COMPLETED': return 'status-success';
+      case 'FAILED': return 'status-failed';
+      case 'RUNNING': return 'status-pending';
+      case 'COMPENSATING': return 'status-paused';
+      case 'CANCELLED': return 'status-paused';
+      default: return 'status-pending';
     }
   };
 
@@ -93,13 +108,16 @@ const Executions = () => {
         </div>
         <div className="flex-1">
           <label className="form-label mb-1">Workflow Filter</label>
-          <input 
-            type="text" 
+          <select 
             className="input" 
-            placeholder="Workflow Name" 
             value={workflowFilter} 
             onChange={e => setWorkflowFilter(e.target.value)}
-          />
+          >
+            <option value="">All Workflows</option>
+            {workflows.map(w => (
+              <option key={w.id} value={w.id}>{w.name}</option>
+            ))}
+          </select>
         </div>
         <button className="btn btn-primary" onClick={fetchExecutions}>Refresh</button>
       </div>
@@ -107,7 +125,8 @@ const Executions = () => {
       {loading ? (
         <div>Loading executions...</div>
       ) : (
-        <div className="table-container">
+        <>
+          <div className="table-container">
           <table>
             <thead>
               <tr>
@@ -127,7 +146,7 @@ const Executions = () => {
                   </td>
                   <td className="font-medium">{ex.workflow_name}</td>
                   <td>
-                    <span className={`badge ${getStatusBadgeClass(ex.status)}`}>
+                    <span className={`status-badge ${getStatusBadgeClass(ex.status)}`}>
                       {ex.status}
                     </span>
                   </td>
@@ -154,25 +173,26 @@ const Executions = () => {
               )}
             </tbody>
           </table>
-          
-          <div className="flex justify-between items-center mt-4">
-            <button 
-              className="btn" 
-              disabled={page === 0} 
-              onClick={() => setPage(p => Math.max(0, p - 1))}
-            >
-              Previous
-            </button>
-            <span className="text-sm text-gray-400">Page {page + 1}</span>
-            <button 
-              className="btn" 
-              disabled={executions.length < pageSize} 
-              onClick={() => setPage(p => p + 1)}
-            >
-              Next
-            </button>
-          </div>
         </div>
+          
+        <div className="flex justify-between items-center mt-6 px-1">
+          <button 
+            className="btn btn-secondary" 
+            disabled={page === 0} 
+            onClick={() => setPage(p => Math.max(0, p - 1))}
+          >
+            Previous
+          </button>
+          <span className="text-sm text-gray-400">Page {page + 1}</span>
+          <button 
+            className="btn btn-secondary" 
+            disabled={executions.length < pageSize} 
+            onClick={() => setPage(p => p + 1)}
+          >
+            Next
+          </button>
+        </div>
+      </>
       )}
     </div>
   );

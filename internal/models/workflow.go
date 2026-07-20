@@ -9,6 +9,7 @@ const (
 
 	ScheduleStatusActive   = "ACTIVE"
 	ScheduleStatusFinished = "FINISHED"
+	ScheduleStatusPaused   = "PAUSED"
 )
 
 type Schedule struct {
@@ -25,8 +26,10 @@ type Schedule struct {
 }
 
 type RetryPolicy struct {
-	MaxAttempts     int    `json:"max_attempts"`
-	BackoffStrategy string `json:"backoff_strategy"`
+	MaxAttempts        int     `json:"max_attempts"`
+	BackoffStrategy    string  `json:"backoff_strategy"`
+	InitialInterval    string  `json:"initial_interval,omitempty"`
+	BackoffCoefficient float64 `json:"backoff_coefficient,omitempty"`
 }
 
 type Activity struct {
@@ -40,4 +43,6 @@ type Workflow struct {
 	ID         string     `json:"id"`
 	Name       string     `json:"name"`
 	Activities []Activity `json:"activities"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }

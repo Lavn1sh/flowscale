@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, CheckCircle, XCircle, Clock, RotateCcw, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, CheckCircle, XCircle, Clock, RotateCcw, AlertTriangle, PlayCircle } from 'lucide-react';
 import api from '../api';
 
 const ExecutionDetail = () => {
@@ -26,6 +26,8 @@ const ExecutionDetail = () => {
 
   useEffect(() => {
     fetchDetail();
+    const interval = setInterval(fetchDetail, 3000);
+    return () => clearInterval(interval);
   }, [id]);
 
   const getEventIcon = (eventType: string) => {
@@ -33,11 +35,11 @@ const ExecutionDetail = () => {
       case 'WORKFLOW_STARTED':
       case 'ACTIVITY_STARTED':
       case 'COMPENSATION_STARTED':
-        return <PlayCircle size={14} />;
+        return <PlayCircle size={14} className="text-info-color" />;
       case 'ACTIVITY_COMPLETED':
       case 'COMPENSATION_COMPLETED':
       case 'WORKFLOW_COMPLETED':
-        return <CheckCircle size={14} className="text-secondary-color" />;
+        return <CheckCircle size={14} className="text-success-color" />;
       case 'WORKFLOW_FAILED':
       case 'ACTIVITY_FAILED':
       case 'COMPENSATION_FAILED':
@@ -52,18 +54,51 @@ const ExecutionDetail = () => {
     }
   };
 
+  const getEventBadgeClass = (eventType: string) => {
+    switch (eventType) {
+      case 'WORKFLOW_STARTED':
+      case 'ACTIVITY_STARTED':
+      case 'COMPENSATION_STARTED':
+      case 'ACTIVITY_RETRIED':
+      case 'ACTIVITY_SCHEDULED':
+      case 'COMPENSATION_SCHEDULED':
+        return 'status-pending';
+      case 'ACTIVITY_COMPLETED':
+      case 'COMPENSATION_COMPLETED':
+      case 'WORKFLOW_COMPLETED':
+        return 'status-success';
+      case 'WORKFLOW_FAILED':
+      case 'ACTIVITY_FAILED':
+      case 'COMPENSATION_FAILED':
+        return 'status-failed';
+      default:
+        return 'status-pending';
+    }
+  };
+
+  const getExecutionBadgeClass = (status: string) => {
+    switch (status) {
+      case 'COMPLETED':
+        return 'status-success';
+      case 'FAILED':
+        return 'status-failed';
+      default:
+        return 'status-pending';
+    }
+  };
+
   if (loading) return <div>Loading...</div>;
   if (!execution) return <div>Execution not found</div>;
 
   return (
     <div>
       <div className="mb-6">
-        <Link to="/executions" className="text-indigo-400 hover:text-indigo-300 flex items-center gap-2 mb-4">
+        <Link to="/executions" className="text-blue-400 hover:text-blue-300 flex items-center gap-2 mb-4">
           <ArrowLeft size={16} /> Back to Executions
         </Link>
         <div className="flex justify-between items-center">
           <h1 className="page-title mb-0">Execution: {id}</h1>
-          <span className="badge badge-neutral text-lg py-2 px-4">{execution.status}</span>
+          <span className={`status-badge px-4 py-2 text-sm ${getExecutionBadgeClass(execution.status)}`}>{execution.status}</span>
         </div>
         <div className="text-gray-400 mt-2">Workflow: <span className="font-bold text-white">{execution.workflow_name}</span></div>
       </div>
@@ -81,11 +116,11 @@ const ExecutionDetail = () => {
                 </div>
                 <div className="timeline-content">
                   <div className="flex justify-between items-start mb-2">
-                    <div className="timeline-title">{ev.event_type}</div>
-                    <div className="timeline-time">{new Date(ev.timestamp).toLocaleString()}</div>
+                    <div className={`status-badge ${getEventBadgeClass(ev.event_type)}`}>{ev.event_type}</div>
+                    <div className="timeline-time text-sm text-gray-500">{new Date(ev.timestamp).toLocaleString()}</div>
                   </div>
                   {ev.payload && Object.keys(ev.payload).length > 0 && (
-                    <pre className="timeline-payload">
+                    <pre className="timeline-payload bg-gray-900 p-3 rounded border border-gray-800 text-xs text-gray-300 overflow-x-auto mt-2">
                       {JSON.stringify(ev.payload, null, 2)}
                     </pre>
                   )}
@@ -98,8 +133,5 @@ const ExecutionDetail = () => {
     </div>
   );
 };
-
-// Forgot PlayCircle
-import { PlayCircle } from 'lucide-react';
 
 export default ExecutionDetail;

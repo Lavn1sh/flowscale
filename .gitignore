@@ -3,3 +3,7 @@ bin/
 .env
 pgdata/
 .DS_Store
+*.log
+traces.json
+flowscale.db
+web/node_modules/

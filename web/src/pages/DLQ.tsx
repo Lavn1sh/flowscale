@@ -50,8 +50,8 @@ const DLQ = () => {
     <div>
       <h1 className="page-title">DLQ & Compensations</h1>
       
-      <div className="card mb-8">
-        <h2 className="text-xl font-bold mb-4 text-danger-color">Dead Letter Queue (DLQ)</h2>
+      <div className="card mb-10 shadow-sm border-gray-700/60">
+        <h2 className="text-2xl font-bold mb-6 text-danger-color">Dead Letter Queue (DLQ)</h2>
         <div className="table-container">
           <table>
             <thead>
@@ -69,8 +69,8 @@ const DLQ = () => {
                   <td className="font-medium">{item.activity_name}</td>
                   <td>{new Date(item.dead_lettered_at?.Time || item.dead_lettered_at).toLocaleString()}</td>
                   <td>
-                    <button className="btn btn-primary text-xs py-1" onClick={() => retryDLQ(item.id)}>
-                      <RotateCcw size={12} className="mr-1 inline" /> Retry
+                    <button className="btn btn-secondary px-3 py-1.5 text-sm" onClick={() => retryDLQ(item.id)}>
+                      <RotateCcw size={14} className="mr-1 inline" /> Retry
                     </button>
                   </td>
                 </tr>
@@ -85,9 +85,9 @@ const DLQ = () => {
         </div>
       </div>
 
-      <div className="card">
-        <h2 className="text-xl font-bold mb-4 text-warning-color">Pending Compensations</h2>
-        <p className="text-sm text-gray-400 mb-4">Executions that failed and may need manual compensation trigger.</p>
+      <div className="card shadow-sm border-gray-700/60">
+        <h2 className="text-2xl font-bold mb-2 text-warning-color">Pending Compensations</h2>
+        <p className="text-sm text-gray-400 mb-6">Executions that failed and may need manual compensation trigger.</p>
         <div className="table-container">
           <table>
             <thead>

@@ -18,10 +18,15 @@ docker-compose up -d
 
 ## Step 2: Run Database Migrations
 Make sure the database schema is up-to-date. The migrations are stored in the `migrations` folder. 
-You can use `golang-migrate` to run them:
+Since you are using Docker, the easiest way to run them without installing additional tools is via the official Docker image. 
 
+Run this command in your terminal:
 ```sh
-migrate -path migrations -database "postgres://postgres:postgres@localhost:5432/flowscale?sslmode=disable" up
+# On Windows (PowerShell)
+docker run --rm -v "${PWD}/migrations:/migrations" migrate/migrate -path=/migrations/ -database "postgres://flowscale:password@host.docker.internal:5432/flowscale?sslmode=disable" up
+
+# On Linux / macOS
+docker run --rm -v "$(pwd)/migrations:/migrations" migrate/migrate -path=/migrations/ -database "postgres://flowscale:password@host.docker.internal:5432/flowscale?sslmode=disable" up
 ```
 
 ## Step 3: Run the Engine Backend
@@ -29,10 +34,10 @@ The Engine acts as the API Server, Scheduler, and Activity Coordinator.
 
 ```sh
 # On Linux / macOS (bash)
-ROLE=api,scheduler go run ./cmd/engine
+ROLE=api,scheduler,engine go run ./cmd/engine
 
 # On Windows (PowerShell)
-$env:ROLE="api,scheduler"; go run ./cmd/engine
+$env:ROLE="api,scheduler,engine"; go run ./cmd/engine
 ```
 
 ## Step 4: Run the Workers

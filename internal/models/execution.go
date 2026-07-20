@@ -43,6 +43,7 @@ const (
 type WorkflowExecution struct {
 	ID              string          `json:"id"`
 	WorkflowID      string          `json:"workflow_id"`
+	WorkflowName    string          `json:"workflow_name"`
 	Status          ExecutionStatus `json:"status"`
 	CurrentActivity string          `json:"current_activity,omitempty"`
 	CreatedAt       time.Time       `json:"created_at"`

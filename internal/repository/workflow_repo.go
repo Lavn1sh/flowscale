@@ -41,12 +41,22 @@ func (r *WorkflowRepo) CreateWorkflow(ctx context.Context, wf *models.Workflow) 
 	for i, act := range wf.Activities {
 		var maxAttempts sql.NullInt64
 		var backoffStrategy sql.NullString
+		var initialInterval sql.NullString
+		var backoffCoefficient sql.NullFloat64
 
 		if act.RetryPolicy != nil {
 			maxAttempts.Int64 = int64(act.RetryPolicy.MaxAttempts)
 			maxAttempts.Valid = true
 			backoffStrategy.String = act.RetryPolicy.BackoffStrategy
 			backoffStrategy.Valid = true
+			if act.RetryPolicy.InitialInterval != "" {
+				initialInterval.String = act.RetryPolicy.InitialInterval
+				initialInterval.Valid = true
+			}
+			if act.RetryPolicy.BackoffCoefficient > 0 {
+				backoffCoefficient.Float64 = act.RetryPolicy.BackoffCoefficient
+				backoffCoefficient.Valid = true
+			}
 		}
 
 		var compActivity sql.NullString
@@ -66,10 +76,84 @@ func (r *WorkflowRepo) CreateWorkflow(ctx context.Context, wf *models.Workflow) 
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO activities (
 				id, workflow_id, name, compensation_activity_name, 
-				retry_max_attempts, retry_backoff_strategy, timeout, position
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+				retry_max_attempts, retry_backoff_strategy, retry_initial_interval, retry_backoff_coefficient, timeout, position
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 			actID, wf.ID, act.Name, compActivity,
-			maxAttempts, backoffStrategy, timeout, i,
+			maxAttempts, backoffStrategy, initialInterval, backoffCoefficient, timeout, i,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert activity %s: %w", act.Name, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (r *WorkflowRepo) UpdateWorkflow(ctx context.Context, wf *models.Workflow) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Update Workflow
+	_, err = tx.ExecContext(ctx,
+		"UPDATE workflows SET name = $1, updated_at = $2 WHERE id = $3",
+		wf.Name, time.Now(), wf.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update workflow: %w", err)
+	}
+
+	// Delete old Activities
+	_, err = tx.ExecContext(ctx, "DELETE FROM activities WHERE workflow_id = $1", wf.ID)
+	if err != nil {
+		return fmt.Errorf("failed to delete old activities: %w", err)
+	}
+
+	// Insert new Activities
+	for i, act := range wf.Activities {
+		var maxAttempts sql.NullInt64
+		var backoffStrategy sql.NullString
+		var initialInterval sql.NullString
+		var backoffCoefficient sql.NullFloat64
+
+		if act.RetryPolicy != nil {
+			maxAttempts.Int64 = int64(act.RetryPolicy.MaxAttempts)
+			maxAttempts.Valid = true
+			backoffStrategy.String = act.RetryPolicy.BackoffStrategy
+			backoffStrategy.Valid = true
+			if act.RetryPolicy.InitialInterval != "" {
+				initialInterval.String = act.RetryPolicy.InitialInterval
+				initialInterval.Valid = true
+			}
+			if act.RetryPolicy.BackoffCoefficient > 0 {
+				backoffCoefficient.Float64 = act.RetryPolicy.BackoffCoefficient
+				backoffCoefficient.Valid = true
+			}
+		}
+
+		var compActivity sql.NullString
+		if act.Compensation != "" {
+			compActivity.String = act.Compensation
+			compActivity.Valid = true
+		}
+
+		var timeout sql.NullString
+		if act.Timeout != "" {
+			timeout.String = act.Timeout
+			timeout.Valid = true
+		}
+
+		actID := fmt.Sprintf("%s-act-%d", wf.ID, i)
+
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO activities (
+				id, workflow_id, name, compensation_activity_name, 
+				retry_max_attempts, retry_backoff_strategy, retry_initial_interval, retry_backoff_coefficient, timeout, position
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			actID, wf.ID, act.Name, compActivity,
+			maxAttempts, backoffStrategy, initialInterval, backoffCoefficient, timeout, i,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert activity %s: %w", act.Name, err)
@@ -81,7 +165,7 @@ func (r *WorkflowRepo) CreateWorkflow(ctx context.Context, wf *models.Workflow) 
 
 func (r *WorkflowRepo) GetWorkflow(ctx context.Context, id string) (*models.Workflow, error) {
 	var wf models.Workflow
-	err := r.db.QueryRowContext(ctx, "SELECT id, name FROM workflows WHERE id = $1", id).Scan(&wf.ID, &wf.Name)
+	err := r.db.QueryRowContext(ctx, "SELECT id, name, created_at, updated_at FROM workflows WHERE id = $1", id).Scan(&wf.ID, &wf.Name, &wf.CreatedAt, &wf.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("workflow not found")
@@ -90,7 +174,7 @@ func (r *WorkflowRepo) GetWorkflow(ctx context.Context, id string) (*models.Work
 	}
 
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT name, compensation_activity_name, retry_max_attempts, retry_backoff_strategy, timeout 
+		`SELECT name, compensation_activity_name, retry_max_attempts, retry_backoff_strategy, retry_initial_interval, retry_backoff_coefficient, timeout 
 		 FROM activities WHERE workflow_id = $1 ORDER BY position`, id)
 	if err != nil {
 		return nil, err
@@ -99,10 +183,14 @@ func (r *WorkflowRepo) GetWorkflow(ctx context.Context, id string) (*models.Work
 
 	for rows.Next() {
 		var act models.Activity
-		var comp, backoff, timeout sql.NullString
+		var comp sql.NullString
 		var maxAttempts sql.NullInt64
+		var backoff sql.NullString
+		var initialInterval sql.NullString
+		var backoffCoeff sql.NullFloat64
+		var timeout sql.NullString
 
-		if err := rows.Scan(&act.Name, &comp, &maxAttempts, &backoff, &timeout); err != nil {
+		if err := rows.Scan(&act.Name, &comp, &maxAttempts, &backoff, &initialInterval, &backoffCoeff, &timeout); err != nil {
 			return nil, err
 		}
 
@@ -114,8 +202,10 @@ func (r *WorkflowRepo) GetWorkflow(ctx context.Context, id string) (*models.Work
 		}
 		if maxAttempts.Valid {
 			act.RetryPolicy = &models.RetryPolicy{
-				MaxAttempts:     int(maxAttempts.Int64),
-				BackoffStrategy: backoff.String,
+				MaxAttempts:        int(maxAttempts.Int64),
+				BackoffStrategy:    backoff.String,
+				InitialInterval:    initialInterval.String,
+				BackoffCoefficient: backoffCoeff.Float64,
 			}
 		}
 		wf.Activities = append(wf.Activities, act)
@@ -129,7 +219,7 @@ func (r *WorkflowRepo) GetWorkflow(ctx context.Context, id string) (*models.Work
 }
 
 func (r *WorkflowRepo) ListWorkflows(ctx context.Context, limit, offset int) ([]*models.Workflow, error) {
-	query := `SELECT id, name FROM workflows ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+	query := `SELECT id, name, created_at, updated_at FROM workflows ORDER BY created_at DESC LIMIT $1 OFFSET $2`
 	rows, err := r.db.QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, err
@@ -139,7 +229,7 @@ func (r *WorkflowRepo) ListWorkflows(ctx context.Context, limit, offset int) ([]
 	var wfs []*models.Workflow
 	for rows.Next() {
 		var wf models.Workflow
-		if err := rows.Scan(&wf.ID, &wf.Name); err != nil {
+		if err := rows.Scan(&wf.ID, &wf.Name, &wf.CreatedAt, &wf.UpdatedAt); err != nil {
 			return nil, err
 		}
 		wfs = append(wfs, &wf)

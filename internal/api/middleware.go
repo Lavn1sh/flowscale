@@ -31,11 +31,11 @@ func BackpressureMiddleware(mq *queue.RabbitMQ, threshold int, next http.Handler
 		if r.Method == http.MethodPost && r.URL.Path == "/workflows/start" {
 			// We check the depth of the results queue as a proxy for engine load.
 			// (Alternatively, we could check specific activity queues)
-			depth, err := mq.GetQueueDepth("engine_results")
+			depth, err := mq.GetQueueDepth(queue.ActivityResultsQueue)
 			if err != nil {
 				slog.Error("failed to check queue depth for backpressure", "err", err)
 			} else {
-				observability.QueueDepth.WithLabelValues("engine_results").Set(float64(depth))
+				observability.QueueDepth.WithLabelValues(queue.ActivityResultsQueue).Set(float64(depth))
 				if depth > threshold {
 					slog.Warn("Backpressure activated, rejecting request", "queue_depth", depth, "threshold", threshold)
 					http.Error(w, "Service Unavailable - System Overloaded", http.StatusServiceUnavailable)

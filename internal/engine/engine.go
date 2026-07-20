@@ -154,7 +154,15 @@ func (e *Engine) ReportActivitySuccess(ctx context.Context, activityID string, e
 		return nil
 	}
 
-	if err := e.execRepo.CompleteActivity(ctx, activityID); err != nil {
+	completeEvent := &models.WorkflowEvent{
+		ID:          uuid.NewString(),
+		ExecutionID: executionID,
+		EventType:   models.EventActivityCompleted,
+		Payload:     []byte(`{"activity":"` + activityName + `"}`),
+		Timestamp:   time.Now(),
+	}
+
+	if err := e.execRepo.CompleteActivity(ctx, activityID, completeEvent); err != nil {
 		return err
 	}
 
@@ -349,7 +357,14 @@ func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, e
 	}
 
 	if act.Attempt < maxAttempts && !nonRetryable {
-		if err := e.execRepo.FailActivity(ctx, activityID); err != nil {
+		failEvent := &models.WorkflowEvent{
+			ID:          uuid.NewString(),
+			ExecutionID: executionID,
+			EventType:   models.EventActivityFailed,
+			Payload:     []byte(`{"activity":"` + activityName + `"}`),
+			Timestamp:   time.Now(),
+		}
+		if err := e.execRepo.FailActivity(ctx, activityID, failEvent); err != nil {
 			return err
 		}
 
@@ -405,7 +420,14 @@ func (e *Engine) ReportActivityFailure(ctx context.Context, activityID string, e
 		Payload: payload,
 	}
 
-	if err := e.execRepo.DeadLetterActivity(ctx, activityID, outboxMsg); err != nil {
+	dlqEvent := &models.WorkflowEvent{
+		ID:          uuid.NewString(),
+		ExecutionID: executionID,
+		EventType:   models.EventActivityFailed,
+		Payload:     []byte(`{"activity":"` + activityName + `"}`),
+		Timestamp:   time.Now(),
+	}
+	if err := e.execRepo.DeadLetterActivity(ctx, activityID, dlqEvent, outboxMsg); err != nil {
 		return err
 	}
 
@@ -469,6 +491,29 @@ func (e *Engine) RetryDeadLetteredActivity(ctx context.Context, activityID strin
 		return fmt.Errorf("activity is not dead-lettered")
 	}
 
+	exec, err := e.execRepo.GetExecution(ctx, act.ExecutionID)
+	if err != nil {
+		return err
+	}
+	if exec.Status == models.ExecutionStatusCompensated || exec.Status == models.ExecutionStatusCancelled || exec.Status == models.ExecutionStatusCompleted {
+		return fmt.Errorf("cannot retry activity: workflow is already %s", exec.Status)
+	}
+
+	wf, err := e.wfRepo.GetWorkflow(ctx, act.ExecutionID)
+	if err != nil {
+		wf, _ = e.wfRepo.GetWorkflow(ctx, exec.WorkflowID)
+	}
+	
+	isComp := true
+	if wf != nil {
+		for _, wa := range wf.Activities {
+			if wa.Name == act.ActivityName {
+				isComp = false
+				break
+			}
+		}
+	}
+
 	nextAttempt := act.Attempt + 1
 	nextExec := &models.ActivityExecution{
 		ID:             uuid.NewString(),
@@ -487,6 +532,9 @@ func (e *Engine) RetryDeadLetteredActivity(ctx context.Context, activityID strin
 		Payload:     fmt.Appendf(nil, `{"activity":"%s","attempt":%d,"manual_retry":true}`, act.ActivityName, nextAttempt),
 		Timestamp:   now,
 	}
+	if isComp {
+		event.EventType = models.EventCompensationStarted
+	}
 
 	payload, _ := json.Marshal(models.ActivityTaskMessage{
 		ExecutionID:    act.ExecutionID,
@@ -499,7 +547,12 @@ func (e *Engine) RetryDeadLetteredActivity(ctx context.Context, activityID strin
 		Topic:   act.ActivityName,
 		Payload: payload,
 	}
-	return e.execRepo.ScheduleNextActivity(ctx, act.ExecutionID, nextExec, event, outboxMsg)
+
+	newStatus := models.ExecutionStatusRunning
+	if isComp {
+		newStatus = models.ExecutionStatusCompensating
+	}
+	return e.execRepo.RetryActivity(ctx, act.ExecutionID, newStatus, nextExec, event, outboxMsg)
 }
 
 func (e *Engine) RetryCompensation(ctx context.Context, executionID string) error {

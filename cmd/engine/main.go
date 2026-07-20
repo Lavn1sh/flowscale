@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -144,8 +145,65 @@ func main() {
 		w.RegisterActivity("create-shipment", func(ctx worker.ActivityContext) error {
 			slog.Info("Executing create-shipment", "executionID", ctx.ExecutionID)
 			time.Sleep(1 * time.Second)
-			return fmt.Errorf("simulated shipment failure")
+			
+			// Check if we are simulating an outage
+			if _, err := os.Stat("shipment_down.txt"); !os.IsNotExist(err) {
+				return fmt.Errorf("simulated shipment failure (service down)")
+			}
+
+			return nil
 		})
+		
+		var flakyMu sync.Mutex
+		flakyAttempts := make(map[string]int)
+
+		w.RegisterActivity("flaky-api", func(ctx worker.ActivityContext) error {
+			slog.Info("Executing flaky-api", "executionID", ctx.ExecutionID)
+			time.Sleep(1 * time.Second)
+
+			flakyMu.Lock()
+			attempts := flakyAttempts[ctx.ExecutionID]
+			flakyAttempts[ctx.ExecutionID] = attempts + 1
+			flakyMu.Unlock()
+
+			if attempts < 3 {
+				return fmt.Errorf("simulated network timeout (attempt %d)", attempts+1)
+			}
+			return nil
+		})
+
+		w.RegisterActivity("always-fail", func(ctx worker.ActivityContext) error {
+			slog.Info("Executing always-fail", "executionID", ctx.ExecutionID)
+			time.Sleep(1 * time.Second)
+			return fmt.Errorf("fatal error (simulated)")
+		})
+
+		// Data-Sync-Cron Demo Activities
+		w.RegisterActivity("extract-data", func(ctx worker.ActivityContext) error {
+			slog.Info("Executing extract-data", "executionID", ctx.ExecutionID)
+			time.Sleep(1 * time.Second)
+			return nil
+		})
+		w.RegisterActivity("transform-data", func(ctx worker.ActivityContext) error {
+			slog.Info("Executing transform-data", "executionID", ctx.ExecutionID)
+			time.Sleep(1 * time.Second)
+			return nil
+		})
+		w.RegisterActivity("load-data", func(ctx worker.ActivityContext) error {
+			slog.Info("Executing load-data", "executionID", ctx.ExecutionID)
+			time.Sleep(1 * time.Second)
+			return nil
+		})
+
+		// Heavy Batch Demo Activities
+		for i := 1; i <= 5; i++ {
+			chunkName := fmt.Sprintf("process-chunk-%d", i)
+			w.RegisterActivity(chunkName, func(ctx worker.ActivityContext) error {
+				slog.Info(fmt.Sprintf("Executing %s", chunkName), "executionID", ctx.ExecutionID)
+				time.Sleep(3 * time.Second)
+				return nil
+			})
+		}
 	}
 
 	healthHandler := api.NewHealthHandler(db, mq)
@@ -162,17 +220,21 @@ func main() {
 		dlqHandler := api.NewDLQHandler(eng, execRepo)
 		scheduleHandler := api.NewScheduleHandler(wfRepo)
 		authHandler := api.NewAuthHandler(userRepo)
+		demoHandler := api.NewDemoHandler()
+		seedHandler := api.NewSeedHandler(wfRepo)
 
 		mux.Handle("/api/auth/login", authHandler)
 		mux.Handle("/executions", execHandler)
 		mux.Handle("/executions/", execHandler)
 		mux.Handle("/workflows/start", execHandler)
+		mux.Handle("/workflows/seed", seedHandler)
 		mux.Handle("/workflows", wfHandler)
 		mux.Handle("/workflows/", wfHandler)
 		mux.Handle("/activities/dlq", dlqHandler)
 		mux.Handle("/activities/dlq/", dlqHandler)
 		mux.Handle("/schedules", scheduleHandler)
 		mux.Handle("/schedules/", scheduleHandler)
+		mux.Handle("/demo/shipment-status", demoHandler)
 	}
 
 	// Apply OTEL Tracing, Rate Limiting (100 req/s, burst 50), and Backpressure (queue > 5000)

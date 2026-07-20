@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom
 import { useAuth } from './context/AuthContext';
 import { LayoutDashboard, Play, Activity, Clock, LogOut } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
+import { DemoControls } from './components/DemoControls';
 
 // Pages (to be implemented)
 import Login from './pages/Login';
@@ -39,9 +40,9 @@ const Sidebar = () => {
           <span>Schedules</span>
         </NavLink>
       </div>
-      <div className="p-4 border-t border-gray-800">
-        <div className="text-sm text-gray-400 mb-2">Logged in as {user?.username}</div>
-        <button className="btn btn-danger w-full" onClick={logout}>
+      <div className="p-6 pb-8 border-t border-gray-800 mt-auto">
+        <div className="text-sm text-gray-400 mb-4">Logged in as {user?.username}</div>
+        <button className="btn btn-danger w-full py-2.5" onClick={logout}>
           <LogOut size={16} /> Logout
         </button>
       </div>
@@ -54,8 +55,8 @@ const MainLayout = () => {
     <div className="app-container">
       <Sidebar />
       <div className="main-content">
-        <div className="topbar">
-          <div className="text-sm text-gray-400">Flowscale Engine API (http://localhost:8080)</div>
+        <div className="topbar flex justify-end items-center w-full px-6">
+          <DemoControls />
         </div>
         <div className="content-area">
           <Outlet />
