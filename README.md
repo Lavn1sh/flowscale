@@ -2,8 +2,6 @@
 
 FlowScale is a high-performance, fault-tolerant workflow engine designed to execute long-running distributed processes with durability, retries, saga compensation, and scheduling. It tackles the challenges of distributed coordination and asynchronous state execution natively in Go.
 
-![FlowScale Dashboard](./docs/assets/dashboard.png) *(Note: this is a conceptual screenshot of the Web UI)*
-
 ## Core Capabilities
 
 - **Durable State Machine**: Workflows can run for seconds or weeks, surviving process restarts or crashes.
