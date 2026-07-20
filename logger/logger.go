@@ -1,7 +1,9 @@
 package logger
 
 import (
+	"io"
 	"log/slog"
+	"os"
 
 	"gopkg.in/natefinch/lumberjack.v2"
 )
@@ -16,10 +18,12 @@ func Init(env string) {
 	}
 
 	var handler slog.Handler
+	multiWriter := io.MultiWriter(os.Stdout, f)
+
 	if env == "production" {
-		handler = slog.NewJSONHandler(f, &slog.HandlerOptions{Level: slog.LevelInfo})
+		handler = slog.NewJSONHandler(multiWriter, &slog.HandlerOptions{Level: slog.LevelInfo})
 	} else {
-		handler = slog.NewTextHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug})
+		handler = slog.NewTextHandler(multiWriter, &slog.HandlerOptions{Level: slog.LevelDebug})
 	}
 
 	logger := slog.New(handler)

@@ -199,8 +199,9 @@ func main() {
 		for i := 1; i <= 5; i++ {
 			chunkName := fmt.Sprintf("process-chunk-%d", i)
 			w.RegisterActivity(chunkName, func(ctx worker.ActivityContext) error {
-				slog.Info(fmt.Sprintf("Executing %s", chunkName), "executionID", ctx.ExecutionID)
+				slog.Info(fmt.Sprintf("Started %s", chunkName), "executionID", ctx.ExecutionID)
 				time.Sleep(3 * time.Second)
+				slog.Info(fmt.Sprintf("Completed %s", chunkName), "executionID", ctx.ExecutionID)
 				return nil
 			})
 		}
